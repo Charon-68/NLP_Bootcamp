@@ -1,23 +1,46 @@
-batch_size: 64
+# Production-Ready Experiment Configuration for Sentence Transformers Pipeline
 
-epochs: 3
+# Experiment Tracking
+experiment_name: "sentence-transformers-mnrl"
+project_name: "sentence-transformers"
 
-learning_rate: 2e-5
-
-warmup_ratio: 0.1
-
-gradient_accumulation_steps: 2
-
-weight_decay: 0.01
-
-max_grad_norm: 1.0
-
-fp16: true
-
+# Basic Training Hyperparameters
 seed: 42
+epochs: 3
+batch_size: 64
+learning_rate: 2.0e-5
+warmup_ratio: 0.1
+weight_decay: 0.01
+gradient_accumulation_steps: 2
+max_grad_norm: 1.0
+scheduler_type: "linear"
 
-output_dir: checkpoints/
+# Precision Configuration
+fp16: true
+bf16: false
 
+# Saving Configuration
+save_strategy: "steps"
+save_steps: 500
+
+# Evaluation Configuration
+evaluation_strategy: "steps"
+eval_steps: 250
 logging_steps: 50
 
-save_steps: 500
+# Best Model Checkpoint Tracking
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+early_stopping_patience: 3
+
+# Data Loading Optimization
+num_workers: 0
+pin_memory: true
+
+# Checkpoint Resuming
+resume_from_checkpoint: null
+
+# Output Directories
+output_dir: "checkpoints/"
+logging_dir: "logs/"
