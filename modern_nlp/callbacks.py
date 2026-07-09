@@ -5,7 +5,7 @@ import torch
 from transformers import TrainerCallback, TrainerState, TrainerControl
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, TaskID
 
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 from modern_nlp.checkpoint_manager import CheckpointManager
 
 logger = get_logger(__name__)

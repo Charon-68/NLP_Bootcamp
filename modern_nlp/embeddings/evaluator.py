@@ -1,18 +1,29 @@
 import os
-from typing import Dict, Any, Optional
+import torch
+import numpy as np
+from typing import Dict, Any, Optional, List
 
-from sentence_transformers.sentence_transformer.evaluation import SentenceEvaluator, InformationRetrievalEvaluator
+from sentence_transformers.evaluation import (
+    SequentialEvaluator,
+    InformationRetrievalEvaluator,
+    EmbeddingSimilarityEvaluator,
+    ParaphraseMiningEvaluator,
+    SentenceEvaluator
+)
 from sentence_transformers.similarity_functions import SimilarityFunction
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 from modern_nlp.metrics import MetricsManager
+from modern_nlp.core.base_evaluator import BaseEvaluator
+from modern_nlp.core.registry import EvaluatorRegistry
 
 logger = get_logger(__name__)
 
-class EmbeddingEvaluator(SentenceEvaluator):
+@EvaluatorRegistry.register("EmbeddingEvaluator")
+class EmbeddingEvaluator(BaseEvaluator, SentenceEvaluator):
     """
     EmbeddingEvaluator coordinates evaluation metrics and validation operations.
-    It wraps the SentenceTransformers InformationRetrievalEvaluator to compute
-    proper embeddings metrics (Recall@K, MRR, MAP, NDCG, Cosine Similarity).
+    It builds a SequentialEvaluator covering Semantic Similarity, IR, and Duplicate Detection,
+    while manually computing Embedding Norm Statistics and Mean Cosine Similarity.
     """
     def __init__(
         self,
@@ -21,20 +32,18 @@ class EmbeddingEvaluator(SentenceEvaluator):
         greater_is_better: bool = False,
         metrics_manager: Optional[MetricsManager] = None
     ) -> None:
-        super().__init__()
-        self.val_dataset = val_dataset
-        self.primary_metric = primary_metric
-        self.greater_is_better = greater_is_better
-        self.metrics_manager = metrics_manager or MetricsManager()
-        self.ir_evaluator = self._build_evaluator()
+        BaseEvaluator.__init__(self, val_dataset, primary_metric, greater_is_better, metrics_manager)
+        SentenceEvaluator.__init__(self)
+        self.evaluators = self._build_evaluators()
 
-    def _build_evaluator(self) -> Optional[InformationRetrievalEvaluator]:
+    def _build_evaluators(self) -> List[SentenceEvaluator]:
         if self.val_dataset is None or len(self.val_dataset) == 0:
-            return None
+            return []
             
-        queries = {}
-        corpus = {}
-        relevant_docs = {}
+        evaluators = []
+        queries, corpus, relevant_docs = {}, {}, {}
+        sentences1, sentences2, scores = [], [], []
+        sentences_map, duplicates_list = {}, []
         
         has_label = "label" in self.val_dataset.column_names
         
@@ -42,45 +51,74 @@ class EmbeddingEvaluator(SentenceEvaluator):
             q_text = row.get("sentence_0")
             c_text = row.get("sentence_1")
             
-            if q_text is None or c_text is None:
+            if not q_text or not c_text:
                 continue
                 
             is_positive = True
+            score = 1.0
             if has_label:
                 label = row.get("label")
-                if label is not None and label == 0:
-                    is_positive = False
-                    
-            if not is_positive:
-                continue
+                if label is not None:
+                    score = float(label)
+                    if label == 0:
+                        is_positive = False
+                        
+            # Data for EmbeddingSimilarityEvaluator
+            sentences1.append(q_text)
+            sentences2.append(c_text)
+            scores.append(score)
+            
+            # Data for IR and ParaphraseMining Evaluators (only positive pairs)
+            if is_positive:
+                q_id = f"q_{idx}"
+                c_id = f"c_{idx}"
                 
-            q_id = f"q_{idx}"
-            c_id = f"c_{idx}"
+                # IR
+                queries[q_id] = q_text
+                corpus[c_id] = c_text
+                relevant_docs.setdefault(q_id, set()).add(c_id)
+                
+                # ParaphraseMining
+                sentences_map[q_id] = q_text
+                sentences_map[c_id] = c_text
+                duplicates_list.append([q_id, c_id])
+                
+        if queries:
+            logger.info(f"Built InformationRetrievalEvaluator with {len(queries)} queries.")
+            evaluators.append(InformationRetrievalEvaluator(
+                queries=queries,
+                corpus=corpus,
+                relevant_docs=relevant_docs,
+                mrr_at_k=[10],
+                ndcg_at_k=[10],
+                precision_recall_at_k=[1, 5, 10],
+                map_at_k=[10],
+                show_progress_bar=False,
+                write_csv=False,
+                main_score_function=SimilarityFunction.COSINE
+            ))
             
-            queries[q_id] = q_text
-            corpus[c_id] = c_text
+        if sentences1:
+            logger.info(f"Built EmbeddingSimilarityEvaluator with {len(sentences1)} pairs.")
+            evaluators.append(EmbeddingSimilarityEvaluator(
+                sentences1=sentences1,
+                sentences2=sentences2,
+                scores=scores,
+                main_similarity=SimilarityFunction.COSINE,
+                show_progress_bar=False,
+                write_csv=False
+            ))
             
-            if q_id not in relevant_docs:
-                relevant_docs[q_id] = set()
-            relevant_docs[q_id].add(c_id)
+        if duplicates_list:
+            logger.info(f"Built ParaphraseMiningEvaluator with {len(duplicates_list)} duplicates.")
+            evaluators.append(ParaphraseMiningEvaluator(
+                sentences_map=sentences_map,
+                duplicates_list=duplicates_list,
+                show_progress_bar=False,
+                write_csv=False
+            ))
             
-        if not queries:
-            logger.warning("EmbeddingEvaluator: No positive query-corpus pairs found for evaluation.")
-            return None
-            
-        logger.info(f"Built InformationRetrievalEvaluator with {len(queries)} queries and {len(corpus)} corpus items.")
-        return InformationRetrievalEvaluator(
-            queries=queries,
-            corpus=corpus,
-            relevant_docs=relevant_docs,
-            mrr_at_k=[10],
-            ndcg_at_k=[10],
-            precision_recall_at_k=[1, 5, 10],
-            map_at_k=[10],
-            show_progress_bar=False,
-            write_csv=True,
-            main_score_function=SimilarityFunction.COSINE
-        )
+        return evaluators
 
     def __call__(
         self,
@@ -90,37 +128,45 @@ class EmbeddingEvaluator(SentenceEvaluator):
         steps: int = -1
     ) -> Dict[str, float]:
         """
-        Executes evaluation on the model during training.
-        Returns a dictionary of metrics and saves reports.
+        Executes evaluation on the model during training or pipeline completion.
         """
         logger.info(f"EmbeddingEvaluator: Running evaluation at epoch {epoch}, steps {steps}.")
+        metrics = {}
         
-        if self.ir_evaluator is None:
-            logger.warning("No evaluation dataset available or no positive pairs found. Skipping evaluation.")
-            return {}
+        if self.evaluators:
+            seq_eval = SequentialEvaluator(self.evaluators)
+            # Some versions of sentence_transformers SequentialEvaluator might not return a dict directly, 
+            # or it might return None. We have to handle it carefully.
+            # In general, evaluators write directly, but some return a score.
+            # To collect metrics, we'll try to extract them. 
+            res = seq_eval(model, output_path=output_path, epoch=epoch, steps=steps)
+            if isinstance(res, dict):
+                metrics.update(res)
+            elif isinstance(res, float):
+                metrics[self.primary_metric] = res
+                
+        # Custom Norm and Cosine Similarity Metrics
+        if self.val_dataset and len(self.val_dataset) > 0:
+            subset_size = min(200, len(self.val_dataset))
+            s1 = self.val_dataset["sentence_0"][:subset_size]
+            s2 = self.val_dataset["sentence_1"][:subset_size]
             
-        # The ir_evaluator generates CSVs directly in output_path if provided
-        # Returns a dict or float depending on the sentence-transformers version, but modern versions return dict.
-        metrics = self.ir_evaluator(model, output_path=output_path, epoch=epoch, steps=steps)
-        
-        # In case the evaluator returns a float, convert to dict using primary metric.
-        if isinstance(metrics, float):
-            metrics = {self.primary_metric: metrics}
-        
-        # 2. Metrics Serialization to JSON
-        if output_path is not None:
-            os.makedirs(output_path, exist_ok=True)
-            file_name = "eval_results.json"
-            if epoch != -1:
-                if steps != -1:
-                    file_name = f"eval_results_epoch_{epoch}_step_{steps}.json"
-                else:
-                    file_name = f"eval_results_epoch_{epoch}.json"
-            out_file = os.path.join(output_path, file_name)
-            self.metrics_manager.serialize_metrics(metrics, out_file)
+            emb1 = model.encode(s1, convert_to_numpy=True, show_progress_bar=False)
+            emb2 = model.encode(s2, convert_to_numpy=True, show_progress_bar=False)
             
-        # Also log the computed metrics summary
-        log_parts = [f"{k}: {v:.4f}" for k, v in metrics.items() if isinstance(v, (int, float))]
-        logger.info("Evaluation Summary - " + " | ".join(log_parts))
+            norms1 = np.linalg.norm(emb1, axis=1)
+            norms2 = np.linalg.norm(emb2, axis=1)
+            all_norms = np.concatenate([norms1, norms2])
+            
+            metrics["norm_mean"] = float(np.mean(all_norms))
+            metrics["norm_std"] = float(np.std(all_norms))
+            metrics["norm_min"] = float(np.min(all_norms))
+            metrics["norm_max"] = float(np.max(all_norms))
+            
+            cos_sim = np.sum(emb1 * emb2, axis=1) / (norms1 * norms2 + 1e-8)
+            metrics["mean_cosine_similarity"] = float(np.mean(cos_sim))
+
+        self._save_metrics(metrics, output_path, epoch, steps)
+        self._log_metrics(metrics)
             
         return metrics

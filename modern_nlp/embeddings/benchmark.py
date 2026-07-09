@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 from modern_nlp.embeddings.dataset import load_dataset, prepare_dataset
 from modern_nlp.embeddings.model import EmbeddingModel
 from modern_nlp.embeddings.evaluator import EmbeddingEvaluator
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 from modern_nlp.hardware import detect_device
 
 logger = get_logger(__name__)

@@ -1,5 +1,5 @@
 import argparse
-from modern_nlp.pipeline import TrainingPipeline
+from modern_nlp.pipelines.embedding_pipeline import EmbeddingPipeline
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Modern NLP Embedding Pipeline CLI")
@@ -18,7 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Instantiate and run the pipeline orchestrator
-    pipeline = TrainingPipeline(
+    pipeline = EmbeddingPipeline(
         model_config_path=args.model_config,
         train_config_path=args.train_config
     )

@@ -8,7 +8,7 @@ from modern_nlp.classification.dataset import load_dataset, prepare_dataset
 from modern_nlp.classification.model import ClassificationModel
 from modern_nlp.classification.trainer import ClassificationTrainer
 from modern_nlp.config import load_train_config, load_yaml
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 
 logger = get_logger(__name__)
 

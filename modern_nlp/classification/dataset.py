@@ -8,7 +8,7 @@ from datasets import Dataset, load_from_disk
 from datasets import load_dataset as hf_load_dataset
 from transformers import DataCollatorWithPadding, PreTrainedTokenizer
 
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 
 logger = get_logger(__name__)
 

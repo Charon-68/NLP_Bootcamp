@@ -1,7 +1,10 @@
 from sentence_transformers import SentenceTransformer
 from typing import List, Union, Any
+from modern_nlp.core.base_model import BaseModel
+from modern_nlp.core.registry import ModelRegistry
 
-class EmbeddingModel:
+@ModelRegistry.register("EmbeddingModel")
+class EmbeddingModel(BaseModel):
     """
     Wrapper around SentenceTransformer.
 

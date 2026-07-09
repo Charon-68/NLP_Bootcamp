@@ -17,7 +17,7 @@ from modern_nlp.checkpoint_manager import CheckpointManager
 from modern_nlp.classification.dataset import get_data_collator
 from modern_nlp.classification.model import ClassificationModel
 from modern_nlp.config import TrainConfig
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 
 logger = get_logger(__name__)
 

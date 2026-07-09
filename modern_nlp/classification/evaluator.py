@@ -10,7 +10,7 @@ from modern_nlp.classification.metrics import MetricsManager
 # We import the visualization function conditionally or normally if implemented.
 # Assuming visualization.py implements plot_confusion_matrix
 from modern_nlp.classification.visualization import plot_confusion_matrix
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 
 logger = get_logger(__name__)
 

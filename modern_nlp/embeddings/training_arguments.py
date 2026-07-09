@@ -4,7 +4,7 @@ from datasets import Dataset
 
 from modern_nlp.config import TrainConfig
 from modern_nlp.hardware import detect_device, is_bf16_supported, is_fp16_supported
-from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.core.utils import get_logger
 
 logger = get_logger(__name__)
 
