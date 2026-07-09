@@ -1,0 +1,302 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-9.1.1, pluggy-1.6.0 -- /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/.venv/bin/python3.11
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers
+configfile: pyproject.toml
+plugins: cov-7.1.0, anyio-4.14.1, xdist-3.8.0, env-1.6.0, hypothesis-6.156.4, hydra-core-1.3.4
+collecting ... collected 5 items
+
+tests/modern_nlp/integration/test_end_to_end.py::test_full_pipeline_flow FAILED [ 20%]
+tests/modern_nlp/unit/test_core.py::test_pipeline_context_initialization FAILED [ 40%]
+tests/modern_nlp/unit/test_core.py::test_pipeline_lifecycle FAILED       [ 60%]
+tests/modern_nlp/unit/test_embeddings.py::test_load_and_prepare_dataset PASSED [ 80%]
+tests/modern_nlp/unit/test_embeddings.py::test_embedding_model_initialization PASSED [100%]
+
+=================================== FAILURES ===================================
+___________________________ test_full_pipeline_flow ____________________________
+
+tmp_path = PosixPath('/private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0')
+
+    def test_full_pipeline_flow(tmp_path):
+        # Create micro configs for rapid integration testing
+        model_config_path = tmp_path / "model_config.yaml"
+        with open(model_config_path, "w") as f:
+            yaml.dump({"model_name": "sentence-transformers/all-MiniLM-L6-v2"}, f)
+    
+        train_config_path = tmp_path / "train_config.yaml"
+        with open(train_config_path, "w") as f:
+            yaml.dump({
+                "experiment_name": "integration-test",
+                "epochs": 1,
+                "batch_size": 2,
+                "max_grad_norm": 1.0,
+                "output_dir": str(tmp_path / "checkpoints"),
+                "run_benchmark": True,
+                "run_visualization": True,
+                "visualization_max_samples": 4
+            }, f)
+    
+        pipeline = EmbeddingPipeline(
+            model_config_path=str(model_config_path),
+            train_config_path=str(train_config_path)
+        )
+    
+        # Run lifecycle hooks
+        pipeline.initialize()
+        pipeline.before_run()
+    
+        # Subset datasets dynamically so the test runs in < 5 seconds
+        pipeline.context.train_dataset = pipeline.context.train_dataset.select(range(4))
+        pipeline.context.val_dataset = pipeline.context.val_dataset.select(range(4))
+    
+        pipeline.context.trainer.train_dataset = pipeline.context.train_dataset
+        pipeline.context.trainer.eval_dataset = pipeline.context.val_dataset
+    
+        # Trigger post-run analytics, evaluations, and reporting
+>       pipeline.after_run()
+
+tests/modern_nlp/integration/test_end_to_end.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+modern_nlp/pipelines/embedding_pipeline.py:84: in after_run
+    metrics = self.context.trainer.evaluate()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+modern_nlp/core/base_trainer.py:194: in evaluate
+    return self.trainer.evaluate()
+           ^^^^^^^^^^^^^^^^^^^^^^^
+sentence_transformers/base/trainer.py:626: in evaluate
+    return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/transformers/trainer.py:2603: in evaluate
+    output = self.evaluation_loop(
+sentence_transformers/base/trainer.py:636: in evaluation_loop
+    output = super().evaluation_loop(
+.venv/lib/python3.11/site-packages/transformers/trainer.py:2718: in evaluation_loop
+    for step, inputs in enumerate(dataloader):
+.venv/lib/python3.11/site-packages/accelerate/data_loader.py:582: in __iter__
+    dataloader_iter = self.base_dataloader.__iter__()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/utils/data/dataloader.py:505: in __iter__
+    return self._get_iterator()
+           ^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/utils/data/dataloader.py:438: in _get_iterator
+    return _MultiProcessingDataLoaderIter(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/utils/data/dataloader.py:1176: in __init__
+    w.start()
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/multiprocessing/process.py:121: in start
+    self._popen = self._Popen(self)
+                  ^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/multiprocessing/context.py:224: in _Popen
+    return _default_context.get_context().Process._Popen(process_obj)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/multiprocessing/context.py:288: in _Popen
+    return Popen(process_obj)
+           ^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/multiprocessing/popen_spawn_posix.py:32: in __init__
+    super().__init__(process_obj)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/multiprocessing/popen_fork.py:19: in __init__
+    self._launch(process_obj)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/multiprocessing/popen_spawn_posix.py:47: in _launch
+    reduction.dump(process_obj, fp)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/multiprocessing/reduction.py:60: in dump
+    ForkingPickler(file, protocol).dump(obj)
+.venv/lib/python3.11/site-packages/torch/multiprocessing/reductions.py:602: in reduce_storage
+    metadata = storage._share_filename_cpu_()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/storage.py:449: in wrapper
+    return fn(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self =  0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 1
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 2
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 3
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 4
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ ...
+ 0
+ 0
+ 0
+ 254
+ 1
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+ 255
+ 1
+ 0
+ 0
+ 0
+ 0
+ 0
+ 0
+[torch.storage.UntypedStorage(device=mps:0) of size 4096]
+args = (), kwargs = {}
+
+    @_share_memory_lock_protected
+    def _share_filename_cpu_(self, *args, **kwargs):
+>       return super()._share_filename_cpu_(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       RuntimeError: _share_filename_: only available on CPU
+
+.venv/lib/python3.11/site-packages/torch/storage.py:531: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+2026-07-09 20:37:30 - modern_nlp.core.base_pipeline - INFO - Initializing Pipeline Components.
+2026-07-09 20:37:30 - modern_nlp.pipelines.embedding_pipeline - INFO - Loading model config from: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/model_config.yaml
+2026-07-09 20:37:30 - modern_nlp.pipelines.embedding_pipeline - INFO - Loading and validating training config from: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/train_config.yaml
+2026-07-09 20:37:30 - modern_nlp.embeddings.dataset - INFO - Attempting to load 'quora' dataset from HuggingFace.
+2026-07-09 20:37:31 - modern_nlp.embeddings.dataset - WARNING - Failed to load 'quora' dataset due to: Dataset scripts are no longer supported, but found quora.py. Falling back to 'sentence-transformers/quora-duplicates'.
+2026-07-09 20:37:34 - modern_nlp.embeddings.dataset - INFO - Successfully loaded 'sentence-transformers/quora-duplicates' dataset with 'pair' config.
+2026-07-09 20:37:34 - modern_nlp.embeddings.dataset - INFO - No official validation split found. Performing a train/test split on 'train' with seed=42.
+2026-07-09 20:37:34 - modern_nlp.embeddings.dataset - INFO - Loaded train set size: 134336, validation set size: 14927
+2026-07-09 20:37:34 - modern_nlp.embeddings.dataset - INFO - Preparing dataset split: train
+2026-07-09 20:37:36 - modern_nlp.embeddings.dataset - INFO - Validation Report - Rows: 134336, Missing: 0, Non-string: 0, Empty: 0, Identical: 13
+2026-07-09 20:37:39 - modern_nlp.embeddings.dataset - INFO - Dataset Summary [train] - Size: 134334, Avg Length: 52.9, Skipped: 0, Duplicates Filtered: 2, Cache: Missed/Rebuilt
+2026-07-09 20:37:39 - modern_nlp.embeddings.dataset - INFO - Saved processed dataset to cache: /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/.cache/dataset/train_286eb0ee5765e53e
+2026-07-09 20:37:39 - modern_nlp.embeddings.dataset - INFO - Preparing dataset split: val
+2026-07-09 20:37:40 - modern_nlp.embeddings.dataset - INFO - Validation Report - Rows: 14927, Missing: 0, Non-string: 0, Empty: 0, Identical: 1
+2026-07-09 20:37:40 - modern_nlp.embeddings.dataset - INFO - Dataset Summary [val] - Size: 14927, Avg Length: 53.2, Skipped: 0, Duplicates Filtered: 0, Cache: Missed/Rebuilt
+2026-07-09 20:37:40 - modern_nlp.embeddings.dataset - INFO - Saved processed dataset to cache: /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/.cache/dataset/val_573577cf30a1e371
+2026-07-09 20:37:40 - modern_nlp.pipelines.embedding_pipeline - INFO - Initializing EmbeddingModel: sentence-transformers/all-MiniLM-L6-v2
+2026-07-09 20:37:46 - modern_nlp.pipelines.embedding_pipeline - INFO - Initializing EmbeddingEvaluator and MetricsManager.
+2026-07-09 20:37:46 - modern_nlp.embeddings.evaluator - INFO - Built InformationRetrievalEvaluator with 14927 queries.
+2026-07-09 20:37:46 - modern_nlp.embeddings.evaluator - INFO - Built EmbeddingSimilarityEvaluator with 14927 pairs.
+2026-07-09 20:37:46 - modern_nlp.embeddings.evaluator - INFO - Built ParaphraseMiningEvaluator with 14927 duplicates.
+2026-07-09 20:37:46 - modern_nlp.pipelines.embedding_pipeline - INFO - Initializing EmbeddingTrainer orchestrator.
+2026-07-09 20:37:46 - modern_nlp.core.base_trainer - INFO - Automatically registering EarlyStoppingCallback with patience=3
+2026-07-09 20:37:46 - modern_nlp.embeddings.trainer - INFO - Building MultipleNegativesRankingLoss.
+2026-07-09 20:37:46 - modern_nlp.embeddings.training_arguments - INFO - Mapping TrainConfig parameters to SentenceTransformerTrainingArguments.
+2026-07-09 20:37:46 - modern_nlp.embeddings.training_arguments - INFO - Mixed Precision - Auto-detected device hardware: mps
+2026-07-09 20:37:46 - modern_nlp.embeddings.training_arguments - INFO - Mixed Precision - Final selected precision: FP16
+2026-07-09 20:37:46 - modern_nlp.embeddings.training_arguments - INFO - LR Scheduler - Selected and validated type: linear
+2026-07-09 20:37:46 - modern_nlp.embeddings.trainer - INFO - Building SentenceTransformerTrainer.
+2026-07-09 20:37:47 - modern_nlp.core.base_trainer - INFO - Saving model to: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/checkpoints/final_model
+2026-07-09 20:37:48 - modern_nlp.pipelines.embedding_pipeline - INFO - Final trained model successfully saved at: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/checkpoints/final_model
+2026-07-09 20:37:48 - modern_nlp.pipelines.embedding_pipeline - INFO - Evaluating final model state...
+2026-07-09 20:37:48 - modern_nlp.core.base_trainer - INFO - Starting evaluation.
+----------------------------- Captured stderr call -----------------------------
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Saving the dataset (0/1 shards):   0%|          | 0/134334 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 134334/134334 [00:00<00:00, 4191495.82 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 134334/134334 [00:00<00:00, 4131168.17 examples/s]
+Saving the dataset (0/1 shards):   0%|          | 0/14927 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14927/14927 [00:00<00:00, 3223414.29 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14927/14927 [00:00<00:00, 3139838.31 examples/s]
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 5094.68it/s]
+[transformers] `logging_dir` is deprecated and will be removed in v5.2. Please set `TENSORBOARD_LOGGING_DIR` instead.
+Computing widget examples:   0%|          | 0/1 [00:00<?, ?example/s]                                                                     Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00,  8.76it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00,  8.75it/s]
+------------------------------ Captured log call -------------------------------
+INFO     modern_nlp.core.base_pipeline:base_pipeline.py:48 Initializing Pipeline Components.
+INFO     modern_nlp.pipelines.embedding_pipeline:embedding_pipeline.py:30 Loading model config from: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/model_config.yaml
+INFO     modern_nlp.pipelines.embedding_pipeline:embedding_pipeline.py:33 Loading and validating training config from: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/train_config.yaml
+INFO     modern_nlp.embeddings.dataset:dataset.py:81 Attempting to load 'quora' dataset from HuggingFace.
+WARNING  huggingface_hub.utils._http:_http.py:951 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING  modern_nlp.embeddings.dataset:dataset.py:86 Failed to load 'quora' dataset due to: Dataset scripts are no longer supported, but found quora.py. Falling back to 'sentence-transformers/quora-duplicates'.
+INFO     modern_nlp.embeddings.dataset:dataset.py:91 Successfully loaded 'sentence-transformers/quora-duplicates' dataset with 'pair' config.
+INFO     modern_nlp.embeddings.dataset:dataset.py:104 No official validation split found. Performing a train/test split on 'train' with seed=42.
+INFO     modern_nlp.embeddings.dataset:dataset.py:114 Loaded train set size: 134336, validation set size: 14927
+INFO     modern_nlp.embeddings.dataset:dataset.py:177 Preparing dataset split: train
+INFO     modern_nlp.embeddings.dataset:dataset.py:169 Validation Report - Rows: 134336, Missing: 0, Non-string: 0, Empty: 0, Identical: 13
+INFO     modern_nlp.embeddings.dataset:dataset.py:238 Dataset Summary [train] - Size: 134334, Avg Length: 52.9, Skipped: 0, Duplicates Filtered: 2, Cache: Missed/Rebuilt
+INFO     modern_nlp.embeddings.dataset:dataset.py:269 Saved processed dataset to cache: /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/.cache/dataset/train_286eb0ee5765e53e
+INFO     modern_nlp.embeddings.dataset:dataset.py:177 Preparing dataset split: val
+INFO     modern_nlp.embeddings.dataset:dataset.py:169 Validation Report - Rows: 14927, Missing: 0, Non-string: 0, Empty: 0, Identical: 1
+INFO     modern_nlp.embeddings.dataset:dataset.py:238 Dataset Summary [val] - Size: 14927, Avg Length: 53.2, Skipped: 0, Duplicates Filtered: 0, Cache: Missed/Rebuilt
+INFO     modern_nlp.embeddings.dataset:dataset.py:269 Saved processed dataset to cache: /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/.cache/dataset/val_573577cf30a1e371
+INFO     modern_nlp.pipelines.embedding_pipeline:embedding_pipeline.py:45 Initializing EmbeddingModel: sentence-transformers/all-MiniLM-L6-v2
+INFO     modern_nlp.pipelines.embedding_pipeline:embedding_pipeline.py:52 Initializing EmbeddingEvaluator and MetricsManager.
+INFO     modern_nlp.embeddings.evaluator:evaluator.py:87 Built InformationRetrievalEvaluator with 14927 queries.
+INFO     modern_nlp.embeddings.evaluator:evaluator.py:102 Built EmbeddingSimilarityEvaluator with 14927 pairs.
+INFO     modern_nlp.embeddings.evaluator:evaluator.py:113 Built ParaphraseMiningEvaluator with 14927 duplicates.
+INFO     modern_nlp.pipelines.embedding_pipeline:embedding_pipeline.py:60 Initializing EmbeddingTrainer orchestrator.
+INFO     modern_nlp.core.base_trainer:base_trainer.py:74 Automatically registering EarlyStoppingCallback with patience=3
+INFO     modern_nlp.embeddings.trainer:trainer.py:59 Building MultipleNegativesRankingLoss.
+INFO     modern_nlp.embeddings.training_arguments:training_arguments.py:21 Mapping TrainConfig parameters to SentenceTransformerTrainingArguments.
+INFO     modern_nlp.embeddings.training_arguments:training_arguments.py:45 Mixed Precision - Auto-detected device hardware: mps
+INFO     modern_nlp.embeddings.training_arguments:training_arguments.py:74 Mixed Precision - Final selected precision: FP16
+INFO     modern_nlp.embeddings.training_arguments:training_arguments.py:80 LR Scheduler - Selected and validated type: linear
+WARNING  sentence_transformers.base.training_args:training_args.py:138 The `warmup_ratio` argument is deprecated in Transformers v5+, and will also be removed from Sentence Transformers once support for Transformers v4 is dropped. Since you're using Transformers v5+, please use `warmup_steps` (as a float) to specify the warmup ratio instead.
+WARNING  transformers.training_args:training_args.py:1490 `logging_dir` is deprecated and will be removed in v5.2. Please set `TENSORBOARD_LOGGING_DIR` instead.
+INFO     modern_nlp.embeddings.trainer:trainer.py:69 Building SentenceTransformerTrainer.
+INFO     modern_nlp.core.base_trainer:base_trainer.py:197 Saving model to: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/checkpoints/final_model
+INFO     modern_nlp.pipelines.embedding_pipeline:embedding_pipeline.py:79 Final trained model successfully saved at: /private/var/folders/4w/np21mgr145v07mn3lp580xz80000gn/T/pytest-of-shouryasaxena/pytest-0/test_full_pipeline_flow0/checkpoints/final_model
+INFO     modern_nlp.pipelines.embedding_pipeline:embedding_pipeline.py:83 Evaluating final model state...
+INFO     modern_nlp.core.base_trainer:base_trainer.py:193 Starting evaluation.
+_____________________ test_pipeline_context_initialization _____________________
+
+    def test_pipeline_context_initialization():
+>       ctx = PipelineContext()
+              ^^^^^^^^^^^^^^^^^
+E       TypeError: PipelineContext.__init__() missing 2 required positional arguments: 'model_config_path' and 'train_config_path'
+
+tests/modern_nlp/unit/test_core.py:16: TypeError
+___________________________ test_pipeline_lifecycle ____________________________
+
+    def test_pipeline_lifecycle():
+>       pipeline = DummyPipeline()
+                   ^^^^^^^^^^^^^^^
+
+tests/modern_nlp/unit/test_core.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_core.DummyPipeline object at 0x369d88b50>
+
+    def __init__(self):
+>       self.context = PipelineContext()
+                       ^^^^^^^^^^^^^^^^^
+E       TypeError: PipelineContext.__init__() missing 2 required positional arguments: 'model_config_path' and 'train_config_path'
+
+tests/modern_nlp/unit/test_core.py:7: TypeError
+=============================== warnings summary ===============================
+modern_nlp/embeddings/evaluator.py:6
+  /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/modern_nlp/embeddings/evaluator.py:6: DeprecationWarning: Importing from 'sentence_transformers.evaluation' is deprecated and will be removed in a future version. Please use 'sentence_transformers.sentence_transformer.evaluation' instead.
+    from sentence_transformers.evaluation import (
+
+modern_nlp/embeddings/evaluator.py:13
+  /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/modern_nlp/embeddings/evaluator.py:13: DeprecationWarning: Importing from 'sentence_transformers.similarity_functions' is deprecated and will be removed in a future version. Please use 'sentence_transformers.util.similarity' instead.
+    from sentence_transformers.similarity_functions import SimilarityFunction
+
+tests/modern_nlp/integration/test_end_to_end.py::test_full_pipeline_flow
+  /Users/shouryasaxena/Downloads/NLP Bootcamp/sentence-transformers/.venv/lib/python3.11/site-packages/torch/utils/data/dataloader.py:1102: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    super().__init__(loader)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/modern_nlp/integration/test_end_to_end.py::test_full_pipeline_flow
+FAILED tests/modern_nlp/unit/test_core.py::test_pipeline_context_initialization
+FAILED tests/modern_nlp/unit/test_core.py::test_pipeline_lifecycle - TypeErro...
+=================== 3 failed, 2 passed, 3 warnings in 30.51s ===================

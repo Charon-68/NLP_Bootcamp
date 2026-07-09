@@ -37,6 +37,14 @@ class TrainConfig(BaseModel):
     logging_dir: str = Field(default="logs/", description="Directory for storing logs.")
     report_to: list[str] = Field(default=["tensorboard"], description="List of experiment trackers to report results to (e.g. tensorboard, wandb).")
     use_wandb: bool = Field(default=False, description="Flag to explicitly enable Weights & Biases logging.")
+    
+    # Benchmarking
+    run_benchmark: bool = Field(default=False, description="Whether to run the benchmark suite after training.")
+    benchmark_baseline_model: str = Field(default="sentence-transformers/all-MiniLM-L6-v2", description="Baseline model to compare against.")
+
+    # Visualization
+    run_visualization: bool = Field(default=False, description="Whether to generate the suite of visualizations after training.")
+    visualization_max_samples: int = Field(default=500, description="Max samples to plot to prevent memory exhaustion.")
 
     @field_validator("scheduler_type")
     @classmethod

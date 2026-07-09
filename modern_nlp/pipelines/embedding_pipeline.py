@@ -83,67 +83,70 @@ class EmbeddingPipeline(BasePipeline):
             logger.info("Evaluating final model state...")
             metrics = self.context.trainer.evaluate()
             
-        # Run benchmark
-        try:
-            from modern_nlp.embeddings.benchmark import run_benchmark
-            
-            benchmark_dir = os.path.join(output_dir, "benchmark")
-            logger.info("Running final automated benchmark comparison...")
-            model_name = self.context.model_config.get("model_name", "sentence-transformers/all-MiniLM-L6-v2")
-            run_benchmark(
-                baseline_name=model_name,
-                finetuned_name=final_save_path,
-                output_dir=benchmark_dir,
-                num_samples=1000
-            )
-            
-            benchmark_json = os.path.join(benchmark_dir, "benchmark_report.json")
-            if os.path.exists(benchmark_json):
-                with open(benchmark_json, "r") as f:
-                    bench_report = json.load(f)
-            else:
-                bench_report = None
-        except Exception as e:
-            logger.error(f"Failed to run automated benchmark: {e}")
-            bench_report = None
+        # Run benchmark conditionally
+        bench_report = None
+        if getattr(self.context.train_config, "run_benchmark", False):
+            try:
+                from modern_nlp.benchmarks.benchmark_runner import run_benchmark
+                
+                benchmark_dir = os.path.join(output_dir, "benchmark")
+                logger.info("Running comprehensive automated benchmark comparison...")
+                
+                baseline_model = getattr(self.context.train_config, "benchmark_baseline_model", "sentence-transformers/all-MiniLM-L6-v2")
+                
+                run_benchmark(
+                    baseline_name=baseline_model,
+                    finetuned_name=final_save_path,
+                    output_dir=benchmark_dir,
+                    num_samples=1000
+                )
+                
+                benchmark_json = os.path.join(benchmark_dir, "benchmark_report.json")
+                if os.path.exists(benchmark_json):
+                    with open(benchmark_json, "r") as f:
+                        bench_report = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to run automated benchmark suite: {e}")
 
-        # Generate Visualizations
-        try:
-            from modern_nlp.embeddings.visualization import generate_visualizations
-            
-            logger.info("Generating embedding visualizations...")
-            vis_dir = os.path.join(output_dir, "visualizations")
-            
-            subset_size = min(500, len(self.context.val_dataset))
-            vis_texts = self.context.val_dataset["sentence_0"][:subset_size] + self.context.val_dataset["sentence_1"][:subset_size]
-            vis_embeddings = self.context.trainer.model.encode(vis_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
-            vis_labels = np.array([0] * subset_size + [1] * subset_size)
-            
-            generate_visualizations(
-                embeddings=vis_embeddings,
-                labels=vis_labels,
-                output_dir=vis_dir,
-                methods=["pca", "tsne"] 
-            )
-        except Exception as e:
-            logger.error(f"Failed to generate visualizations: {e}")
+        # Generate Visualizations conditionally
+        if getattr(self.context.train_config, "run_visualization", False):
+            try:
+                from modern_nlp.visualization import EmbeddingVisualizer
+                
+                logger.info("Generating comprehensive embedding visualizations...")
+                vis_dir = os.path.join(output_dir, "visualizations")
+                max_samples = getattr(self.context.train_config, "visualization_max_samples", 500)
+                
+                subset_size = min(max_samples, len(self.context.val_dataset))
+                vis_texts = self.context.val_dataset["sentence_0"][:subset_size] + self.context.val_dataset["sentence_1"][:subset_size]
+                vis_embeddings = self.context.trainer.model.encode(vis_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+                
+                has_label = "label" in self.context.val_dataset.column_names
+                if has_label:
+                    vis_labels = []
+                    for idx in range(subset_size):
+                        lbl = self.context.val_dataset[idx]["label"]
+                        vis_labels.extend([lbl, lbl])
+                    vis_labels = np.array(vis_labels)
+                else:
+                    vis_labels = np.array([0] * subset_size + [1] * subset_size)
+                
+                visualizer = EmbeddingVisualizer(output_dir=vis_dir)
+                visualizer.generate_all(embeddings=vis_embeddings, labels=vis_labels, methods="all", max_samples=max_samples)
+                
+            except Exception as e:
+                logger.error(f"Failed to generate visualizations: {e}")
 
         # Generate Experiment Report
         try:
-            from modern_nlp.embeddings.report import generate_experiment_report
-            from modern_nlp.hardware import detect_device
+            from modern_nlp.reporting import ExperimentReportGenerator
             
-            config_dict = self.context.train_config.__dict__ if hasattr(self.context.train_config, "__dict__") else self.context.train_config
-            
-            generate_experiment_report(
-                config=config_dict,
-                hardware_info={"device": str(detect_device())},
-                training_time_sec=getattr(self.context.trainer, "total_training_time", 0.0),
-                dataset_stats={"train_size": len(self.context.train_dataset), "val_size": len(self.context.val_dataset)},
+            logger.info("Generating unified experiment report...")
+            generator = ExperimentReportGenerator(context=self.context)
+            generator.generate(
+                output_dir=output_dir,
                 evaluation_metrics=metrics,
-                benchmark_comparison=bench_report,
-                checkpoint_info={"final_model_path": final_save_path},
-                output_dir=output_dir
+                final_save_path=final_save_path
             )
         except Exception as e:
             logger.error(f"Failed to generate automated experiment report: {e}")
