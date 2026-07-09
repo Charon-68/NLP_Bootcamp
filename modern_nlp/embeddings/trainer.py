@@ -12,6 +12,7 @@ from transformers import TrainerCallback, TrainerState, TrainerControl
 from modern_nlp.config import TrainConfig
 from modern_nlp.embeddings.model import EmbeddingModel
 from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.checkpoint_manager import CheckpointManager
 from modern_nlp.embeddings.callbacks import (
     ExperimentTrackingCallback,
     EarlyStoppingCallback,
@@ -45,11 +46,28 @@ class EmbeddingTrainer:
         self.train_dataset = self.build_dataset(self.train_examples)
         self.eval_dataset = self.build_dataset(self.eval_examples) if self.eval_examples is not None else None
         
+        # Initialize CheckpointManager
+        self.checkpoint_manager = CheckpointManager(
+            output_dir=self.config.output_dir,
+            max_to_keep=2
+        )
+        
+        # Initialize custom evaluator if validation dataset is available
+        self.evaluator = None
+        if self.eval_dataset is not None:
+            from modern_nlp.embeddings.evaluator import EmbeddingEvaluator
+            self.evaluator = EmbeddingEvaluator(
+                val_dataset=self.eval_dataset,
+                primary_metric=self.config.metric_for_best_model,
+                greater_is_better=self.config.greater_is_better
+            )
+        
         # Initialize and register default custom callbacks list automatically
         self.callbacks: List[TrainerCallback] = [
             ExperimentTrackingCallback(),
             ProgressCallback(),
             CheckpointCallback(
+                checkpoint_manager=self.checkpoint_manager,
                 metric=self.config.metric_for_best_model,
                 greater_is_better=self.config.greater_is_better
             )
@@ -133,6 +151,14 @@ class EmbeddingTrainer:
         logger.info(f"Building DataLoader with batch_size={batch_size}, shuffle={shuffle}.")
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
+    def build_scheduler(self) -> str:
+        """
+        Validates and returns the selected learning rate scheduler type from config.
+        """
+        scheduler_type = self.config.scheduler_type.lower()
+        logger.info(f"LR Scheduler - Selected and validated type: {scheduler_type}")
+        return scheduler_type
+
     def build_training_arguments(self) -> SentenceTransformerTrainingArguments:
         """
         Maps properties of TrainConfig to SentenceTransformerTrainingArguments.
@@ -202,6 +228,9 @@ class EmbeddingTrainer:
         else:
             logger.info("Mixed Precision - Final selected precision: FP32")
             
+        # Resolve Scheduler Type
+        lr_scheduler_type = self.build_scheduler()
+            
         return SentenceTransformerTrainingArguments(
             output_dir=self.config.output_dir,
             num_train_epochs=self.config.epochs,
@@ -212,7 +241,7 @@ class EmbeddingTrainer:
             weight_decay=self.config.weight_decay,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             max_grad_norm=self.config.max_grad_norm,
-            lr_scheduler_type=self.config.scheduler_type,
+            lr_scheduler_type=lr_scheduler_type,
             fp16=use_fp16,
             bf16=use_bf16,
             seed=self.config.seed,
@@ -234,7 +263,7 @@ class EmbeddingTrainer:
     def build_trainer(self) -> None:
         """
         Builds the SentenceTransformerTrainer instance using the configuration,
-        dataset, loss, and callbacks.
+        dataset, loss, callbacks, and evaluator.
         """
         logger.info("Building SentenceTransformerTrainer.")
         self.trainer = SentenceTransformerTrainer(
@@ -244,16 +273,46 @@ class EmbeddingTrainer:
             eval_dataset=self.eval_dataset,
             loss=self.loss,
             callbacks=self.callbacks,
+            evaluator=self.evaluator,
         )
 
     def train(self) -> None:
         """
         Runs the training execution using the configured SentenceTransformerTrainer.
+        Supports automatic resume lookup from the latest checkpoint.
         """
         if self.trainer is None:
             raise RuntimeError("Trainer has not been built. Call build_trainer() first.")
+            
+        resume_path = None
+        
+        # Check if resume_from_checkpoint option is requested
+        if self.config.resume_from_checkpoint:
+            if isinstance(self.config.resume_from_checkpoint, str):
+                # If a specific path is provided, check if it exists
+                if os.path.exists(self.config.resume_from_checkpoint):
+                    resume_path = self.config.resume_from_checkpoint
+                    logger.info(f"Resume: Using explicitly requested checkpoint folder: {resume_path}")
+                else:
+                    logger.warning(
+                        f"Resume: Explicit checkpoint path '{self.config.resume_from_checkpoint}' "
+                        "not found. Attempting to look up latest checkpoint automatically."
+                    )
+            
+            # If path was not set or not found, search output_dir for latest valid checkpoint
+            if resume_path is None:
+                resume_path = self.checkpoint_manager.find_latest_checkpoint()
+                
+            if resume_path is not None:
+                logger.info(f"Resume: Successfully loaded checkpoint state from: {resume_path}. Restoring optimizer, scheduler, global step, and epoch.")
+            else:
+                logger.warning(
+                    f"Resume: No valid checkpoint folder found in output directory '{self.config.output_dir}'. "
+                    "Starting training from scratch."
+                )
+                
         logger.info("Starting SentenceTransformerTrainer training loop.")
-        self.trainer.train(resume_from_checkpoint=self.config.resume_from_checkpoint)
+        self.trainer.train(resume_from_checkpoint=resume_path)
 
     def evaluate(self) -> Dict[str, float]:
         """

@@ -4,6 +4,7 @@ from transformers import TrainerCallback, TrainerState, TrainerControl
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, TaskID
 
 from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.checkpoint_manager import CheckpointManager
 
 logger = get_logger(__name__)
 
@@ -136,30 +137,25 @@ class ProgressCallback(TrainerCallback):
 
 class CheckpointCallback(TrainerCallback):
     """
-    CheckpointCallback automatically saves multiple versions of the model:
+    CheckpointCallback automatically saves multiple versions of the model
+    delegating the save and cleanup logic to CheckpointManager:
     - 'latest' version (updated at every save event)
     - 'best' version (updated when the monitored validation metric improves)
     - 'epoch' version (saved at the end of each epoch)
     """
-    def __init__(self, metric: str = "eval_loss", greater_is_better: bool = False) -> None:
+    def __init__(self, checkpoint_manager: CheckpointManager, metric: str = "eval_loss", greater_is_better: bool = False) -> None:
+        self.manager = checkpoint_manager
         self.metric = metric
         self.greater_is_better = greater_is_better
         self.best_metric: Optional[float] = None
-
-    def _save_model_to(self, model: Any, target_dir: str) -> None:
-        """Helper method to safely save a model weights directory."""
-        os.makedirs(target_dir, exist_ok=True)
-        logger.info(f"CheckpointCallback: Saving model to version folder: {target_dir}")
-        model.save(target_dir)
 
     def on_save(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> None:
         model = kwargs.get("model")
         if model is None:
             return
             
-        # Save "latest" version
-        latest_dir = os.path.join(args.output_dir, "latest")
-        self._save_model_to(model, latest_dir)
+        # Delegate saving of latest model version to CheckpointManager
+        self.manager.save_latest(model)
 
     def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics=None, **kwargs) -> None:
         model = kwargs.get("model")
@@ -180,9 +176,8 @@ class CheckpointCallback(TrainerCallback):
                 
         if is_improved:
             self.best_metric = current_val
-            best_dir = os.path.join(args.output_dir, "best")
-            logger.info(f"CheckpointCallback: Metric '{self.metric}' improved to {current_val:.4f}. Saving 'best' version.")
-            self._save_model_to(model, best_dir)
+            # Delegate saving of best model version to CheckpointManager
+            self.manager.save_best(model, current_val, self.metric)
 
     def on_epoch_end(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> None:
         model = kwargs.get("model")
@@ -190,6 +185,5 @@ class CheckpointCallback(TrainerCallback):
             return
             
         epoch_num = int(round(state.epoch))
-        epoch_dir = os.path.join(args.output_dir, f"epoch-{epoch_num}")
-        logger.info(f"CheckpointCallback: Saving 'epoch-{epoch_num}' version.")
-        self._save_model_to(model, epoch_dir)
+        # Delegate saving of epoch model version to CheckpointManager
+        self.manager.save_epoch(model, epoch_num)

@@ -1,7 +1,7 @@
 import yaml
 from pathlib import Path
 from typing import Any, Optional, Union
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 class TrainConfig(BaseModel):
     """
@@ -37,6 +37,22 @@ class TrainConfig(BaseModel):
     logging_dir: str = Field(default="logs/", description="Directory for storing logs.")
     report_to: list[str] = Field(default=["tensorboard"], description="List of experiment trackers to report results to (e.g. tensorboard, wandb).")
     use_wandb: bool = Field(default=False, description="Flag to explicitly enable Weights & Biases logging.")
+
+    @field_validator("scheduler_type")
+    @classmethod
+    def validate_scheduler_type(cls, v: str) -> str:
+        valid_types = ["linear", "cosine", "cosine_with_restarts", "polynomial"]
+        v_lower = v.lower()
+        if v_lower not in valid_types:
+            raise ValueError(f"scheduler_type must be one of {valid_types}, got '{v}'")
+        return v_lower
+
+    @field_validator("warmup_ratio")
+    @classmethod
+    def validate_warmup_ratio(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"warmup_ratio must be between 0.0 and 1.0, got {v}")
+        return v
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
     """
