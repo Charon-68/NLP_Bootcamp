@@ -1,0 +1,9 @@
+# Classification model configuration.
+# This file specifies the model architecture and is loaded separately
+# from training hyperparameters to allow model swapping without
+# touching training configuration.
+
+model_name: "answerdotai/ModernBERT-base"
+num_labels: 4
+max_seq_length: 512
+label_smoothing: 0.0

@@ -1,30 +1,18 @@
-# =============================================================================
-# Modern NLP Systems Framework — Classification Module Configuration
-# =============================================================================
-# Single unified configuration file for ClassificationPipeline.
-# All model and training parameters live here.
-#
-# Loaded by: ClassificationPipeline.load_config()
-# Validated by: ClassificationConfig (Pydantic) in classification/config.py
-# =============================================================================
+# Classification module training configuration
+# This file drives ClassificationPipeline and is validated
+# against ClassificationConfig (Pydantic schema).
+# All unspecified keys fall back to TrainConfig defaults.
 
 # ── Experiment Identity ────────────────────────────────────────────────────────
 experiment_name: "classification-ag-news"
 project_name: "modern-nlp-classification"
 seed: 42
 
-# ── Model ─────────────────────────────────────────────────────────────────────
-# Loaded in priority order if the first fails:
-#   1. model_name below
-#   2. answerdotai/ModernBERT-base
-#   3. microsoft/deberta-v3-base
-#   4. bert-base-uncased
-model_name: "answerdotai/ModernBERT-base"
-num_labels: 4
-max_seq_length: 512
-
 # ── Dataset ───────────────────────────────────────────────────────────────────
 dataset_name: "ag_news"
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+# Loaded via model.yaml: model_name, num_labels, max_seq_length
 
 # ── Training ──────────────────────────────────────────────────────────────────
 epochs: 3
@@ -39,6 +27,7 @@ max_grad_norm: 1.0
 # ── Loss ──────────────────────────────────────────────────────────────────────
 label_smoothing: 0.0
 use_class_weights: true
+num_labels: 4
 
 # ── Mixed Precision ───────────────────────────────────────────────────────────
 fp16: true

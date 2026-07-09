@@ -54,10 +54,11 @@ class EmbeddingTrainer(BaseTrainer):
 
     def build_loss(self) -> MultipleNegativesRankingLoss:
         """
-        Builds and returns the training loss function using the model backbone.
+        Delegates loss construction to EmbeddingLossFactory.
         """
-        logger.info("Building MultipleNegativesRankingLoss.")
-        return MultipleNegativesRankingLoss(model=self.model.backbone)
+        from modern_nlp.core.losses.embedding_loss_factory import EmbeddingLossFactory
+        return EmbeddingLossFactory().build(model=self.model.backbone)
+
 
     def _build_training_arguments(self):
         return TrainingArgumentsFactory.build(self.config, self.eval_dataset)
