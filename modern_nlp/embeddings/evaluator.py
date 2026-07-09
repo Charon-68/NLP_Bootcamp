@@ -1,27 +1,12 @@
 import os
 import json
-import logging
-import sys
 from typing import Dict, Any, Optional
 
 from sentence_transformers.evaluation import SentenceEvaluator
+from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.metrics import MetricsManager
 
-def get_local_logger(name: str) -> logging.Logger:
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(logging.INFO)
-        formatter = logging.Formatter(
-            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    logger.propagate = False
-    return logger
-
-logger = get_local_logger(__name__)
+logger = get_logger(__name__)
 
 class EmbeddingEvaluator(SentenceEvaluator):
     """
@@ -33,12 +18,14 @@ class EmbeddingEvaluator(SentenceEvaluator):
         self,
         val_dataset: Any = None,
         primary_metric: str = "eval_loss",
-        greater_is_better: bool = False
+        greater_is_better: bool = False,
+        metrics_manager: Optional[MetricsManager] = None
     ) -> None:
         super().__init__()
         self.val_dataset = val_dataset
         self.primary_metric = primary_metric
         self.greater_is_better = greater_is_better
+        self.metrics_manager = metrics_manager or MetricsManager()
 
     def __call__(
         self,
@@ -66,7 +53,7 @@ class EmbeddingEvaluator(SentenceEvaluator):
                 else:
                     file_name = f"eval_results_epoch_{epoch}.json"
             out_file = os.path.join(output_path, file_name)
-            self.serialize_metrics(metrics, out_file)
+            self.metrics_manager.serialize_metrics(metrics, out_file)
             
         return metrics
 
@@ -105,14 +92,3 @@ class EmbeddingEvaluator(SentenceEvaluator):
         
         logger.info(f"EmbeddingEvaluator: Evaluation completed. Metrics: {metrics}")
         return metrics
-
-    def serialize_metrics(self, metrics: Dict[str, float], output_path: str) -> None:
-        """
-        Serializes and saves the metrics dictionary to the specified file path.
-        """
-        logger.info(f"EmbeddingEvaluator: Serializing metrics to: {output_path}")
-        try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(metrics, f, indent=4)
-        except Exception as e:
-            logger.error(f"EmbeddingEvaluator: Failed to serialize metrics to {output_path}: {e}")

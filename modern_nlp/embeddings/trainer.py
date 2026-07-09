@@ -1,13 +1,13 @@
 import os
-from typing import List, Optional, Dict, Any
+import time
+import random
+import numpy as np
+from typing import List, Optional, Dict
 import torch
-from torch.utils.data import DataLoader
-from sentence_transformers.sentence_transformer.readers import InputExample
 from sentence_transformers.sentence_transformer.losses import MultipleNegativesRankingLoss
 from sentence_transformers.sentence_transformer.trainer import SentenceTransformerTrainer
-from sentence_transformers.sentence_transformer.training_args import SentenceTransformerTrainingArguments
 from datasets import Dataset
-from transformers import TrainerCallback, TrainerState, TrainerControl
+from transformers import TrainerCallback
 
 from modern_nlp.config import TrainConfig
 from modern_nlp.embeddings.model import EmbeddingModel
@@ -19,50 +19,51 @@ from modern_nlp.embeddings.callbacks import (
     ProgressCallback,
     CheckpointCallback
 )
+from modern_nlp.embeddings.training_arguments import TrainingArgumentsFactory
+from modern_nlp.metrics import MetricsManager
+from modern_nlp.embeddings.evaluator import EmbeddingEvaluator
 
 logger = get_logger(__name__)
 
 class EmbeddingTrainer:
     """
-    EmbeddingTrainer is responsible for configuring training parameters,
-    preparing input datasets/dataloaders, building training loss, and
-    running the SentenceTransformerTrainer training loop using Pydantic TrainConfig
-    with custom experiment tracking, early stopping, progress bar, checkpointing,
-    and automatic hardware-aware mixed-precision configurations.
+    EmbeddingTrainer acts as an orchestrator, configuring training parameters,
+    building training loss, and running the SentenceTransformerTrainer training loop.
+    Follows Dependency Injection principles.
     """
     def __init__(
         self,
         model: EmbeddingModel,
-        train_examples: List[InputExample],
+        train_dataset: Dataset,
         training_config: TrainConfig,
-        eval_examples: Optional[List[InputExample]] = None,
+        eval_dataset: Optional[Dataset] = None,
+        checkpoint_manager: Optional[CheckpointManager] = None,
+        evaluator: Optional[EmbeddingEvaluator] = None,
+        metrics_manager: Optional[MetricsManager] = None,
     ) -> None:
         self.model = model
-        self.train_examples = train_examples
-        self.eval_examples = eval_examples
+        self.train_dataset = train_dataset
+        self.eval_dataset = eval_dataset
         self.config = training_config
         
-        # Build training and validation datasets
-        self.train_dataset = self.build_dataset(self.train_examples)
-        self.eval_dataset = self.build_dataset(self.eval_examples) if self.eval_examples is not None else None
-        
-        # Initialize CheckpointManager
-        self.checkpoint_manager = CheckpointManager(
+        # Dependency Injection (with sensible defaults)
+        self.checkpoint_manager = checkpoint_manager or CheckpointManager(
             output_dir=self.config.output_dir,
             max_to_keep=2
         )
+        self.metrics_manager = metrics_manager or MetricsManager()
         
-        # Initialize custom evaluator if validation dataset is available
-        self.evaluator = None
-        if self.eval_dataset is not None:
-            from modern_nlp.embeddings.evaluator import EmbeddingEvaluator
-            self.evaluator = EmbeddingEvaluator(
+        if eval_dataset is not None:
+            self.evaluator = evaluator or EmbeddingEvaluator(
                 val_dataset=self.eval_dataset,
                 primary_metric=self.config.metric_for_best_model,
-                greater_is_better=self.config.greater_is_better
+                greater_is_better=self.config.greater_is_better,
+                metrics_manager=self.metrics_manager
             )
-        
-        # Initialize and register default custom callbacks list automatically
+        else:
+            self.evaluator = None
+            
+        # Initialize and register callbacks (stateless / event driven)
         self.callbacks: List[TrainerCallback] = [
             ExperimentTrackingCallback(),
             ProgressCallback(),
@@ -73,7 +74,6 @@ class EmbeddingTrainer:
             )
         ]
         
-        # Register custom EarlyStoppingCallback if configured
         if self.config.early_stopping_patience is not None and self.config.early_stopping_patience > 0:
             if self.eval_dataset is not None:
                 logger.info(f"Automatically registering EarlyStoppingCallback with patience={self.config.early_stopping_patience}")
@@ -85,11 +85,10 @@ class EmbeddingTrainer:
                     )
                 )
             else:
-                logger.warning("Early stopping is configured, but no evaluation dataset was provided. Early stopping callback will not be added.")
+                logger.warning("Early stopping is configured, but no evaluation dataset was provided.")
         
-        # Build training loss, training arguments, and the trainer itself
         self.loss = self.build_loss()
-        self.args = self.build_training_arguments()
+        self.args = TrainingArgumentsFactory.build(self.config, self.eval_dataset)
         
         self.trainer: Optional[SentenceTransformerTrainer] = None
         self.build_trainer()
@@ -97,8 +96,6 @@ class EmbeddingTrainer:
     def register_callback(self, callback: TrainerCallback) -> None:
         """
         Registers an additional callback for the trainer.
-        If the trainer has already been built, adds it directly to the trainer instance.
-        Otherwise, adds it to the list of pending callbacks to be registered at build time.
         """
         logger.info(f"Registering callback: {callback.__class__.__name__}")
         if self.trainer is not None:
@@ -108,166 +105,18 @@ class EmbeddingTrainer:
 
     def build_loss(self) -> MultipleNegativesRankingLoss:
         """
-        Builds and returns the training loss function.
+        Builds and returns the training loss function using the model backbone.
         """
         logger.info("Building MultipleNegativesRankingLoss.")
-        return MultipleNegativesRankingLoss(model=self.model.model)
-
-    def build_dataset(self, examples: List[InputExample]) -> Dataset:
-        """
-        Converts a list of InputExample objects to a Hugging Face Dataset.
-        Maps the list structure to columns like sentence_0, sentence_1...
-        """
-        logger.info("Converting InputExamples list to Hugging Face Dataset.")
-        texts = [example.texts for example in examples]
-        
-        if not texts:
-            logger.warning("Empty list of InputExamples provided for training/evaluation dataset.")
-            return Dataset.from_dict({})
-            
-        # Map each text column dynamically (e.g. sentence_0, sentence_1...)
-        dataset_dict = {f"sentence_{idx}": list(col) for idx, col in enumerate(zip(*texts))}
-        
-        # Add labels if they exist in the input examples
-        labels = [example.label for example in examples]
-        add_label_column = True
-        try:
-            if set(labels) == {0} or all(x is None for x in labels):
-                add_label_column = False
-        except TypeError:
-            pass
-            
-        if add_label_column:
-            dataset_dict["label"] = labels
-            
-        return Dataset.from_dict(dataset_dict)
-
-    def build_dataloader(self, dataset: Dataset, batch_size: int, shuffle: bool = True) -> DataLoader:
-        """
-        Builds a PyTorch DataLoader.
-        Note: The SentenceTransformerTrainer manages dataloaders internally using get_train_dataloader,
-        but this method is exposed for custom data pipeline requirements or manual iteration.
-        """
-        logger.info(f"Building DataLoader with batch_size={batch_size}, shuffle={shuffle}.")
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-
-    def build_scheduler(self) -> str:
-        """
-        Validates and returns the selected learning rate scheduler type from config.
-        """
-        scheduler_type = self.config.scheduler_type.lower()
-        logger.info(f"LR Scheduler - Selected and validated type: {scheduler_type}")
-        return scheduler_type
-
-    def build_training_arguments(self) -> SentenceTransformerTrainingArguments:
-        """
-        Maps properties of TrainConfig to SentenceTransformerTrainingArguments.
-        Supports hardware-aware mixed precision with auto-fallbacks.
-        """
-        logger.info("Mapping TrainConfig parameters to SentenceTransformerTrainingArguments.")
-        
-        eval_strategy = self.config.evaluation_strategy
-        if self.eval_dataset is None or len(self.eval_dataset) == 0:
-            if eval_strategy != "no":
-                logger.warning(
-                    f"evaluation_strategy was set to '{eval_strategy}', but no evaluation dataset was provided. "
-                    "Overriding evaluation_strategy to 'no' to prevent HF Trainer validation error."
-                )
-                eval_strategy = "no"
-                
-        save_strategy = self.config.save_strategy
-        
-        # Resolve report_to tracking integrations list based on use_wandb flag
-        report_to = list(self.config.report_to)
-        if self.config.use_wandb:
-            if "wandb" not in report_to:
-                report_to.append("wandb")
-        else:
-            if "wandb" in report_to:
-                report_to.remove("wandb")
-        
-        # Mixed Precision Hardware Detection & Fallback
-        device = "cpu"
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-            
-        logger.info(f"Mixed Precision - Auto-detected device hardware: {device}")
-        
-        use_bf16 = False
-        use_fp16 = False
-        
-        # 1. Resolve BF16 Precision
-        if self.config.bf16:
-            if device == "cuda" and torch.cuda.is_bf16_supported():
-                use_bf16 = True
-            elif device == "cpu":
-                use_bf16 = True
-            else:
-                logger.warning(
-                    f"Mixed Precision - BF16 was requested but is not supported on {device}. "
-                    "Checking FP16 availability."
-                )
-                
-        # 2. Resolve FP16 Precision (if BF16 not selected/supported)
-        if not use_bf16 and self.config.fp16:
-            if device == "cuda" or device == "mps":
-                use_fp16 = True
-            else:
-                logger.warning(
-                    f"Mixed Precision - FP16 was requested but is not supported on {device}. "
-                    "Falling back to FP32."
-                )
-                
-        # Log final selected training precision
-        if use_bf16:
-            logger.info("Mixed Precision - Final selected precision: BF16")
-        elif use_fp16:
-            logger.info("Mixed Precision - Final selected precision: FP16")
-        else:
-            logger.info("Mixed Precision - Final selected precision: FP32")
-            
-        # Resolve Scheduler Type
-        lr_scheduler_type = self.build_scheduler()
-            
-        return SentenceTransformerTrainingArguments(
-            output_dir=self.config.output_dir,
-            num_train_epochs=self.config.epochs,
-            per_device_train_batch_size=self.config.batch_size,
-            per_device_eval_batch_size=self.config.batch_size,
-            learning_rate=self.config.learning_rate,
-            warmup_ratio=self.config.warmup_ratio,
-            weight_decay=self.config.weight_decay,
-            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-            max_grad_norm=self.config.max_grad_norm,
-            lr_scheduler_type=lr_scheduler_type,
-            fp16=use_fp16,
-            bf16=use_bf16,
-            seed=self.config.seed,
-            logging_steps=self.config.logging_steps,
-            save_steps=self.config.save_steps,
-            save_strategy=save_strategy,
-            eval_strategy=eval_strategy,
-            eval_steps=self.config.eval_steps,
-            load_best_model_at_end=self.config.load_best_model_at_end if eval_strategy != "no" else False,
-            metric_for_best_model=self.config.metric_for_best_model if eval_strategy != "no" else None,
-            greater_is_better=self.config.greater_is_better if eval_strategy != "no" else None,
-            dataloader_num_workers=self.config.num_workers,
-            dataloader_pin_memory=self.config.pin_memory,
-            logging_dir=self.config.logging_dir,
-            run_name=self.config.experiment_name,
-            report_to=report_to,
-        )
+        return MultipleNegativesRankingLoss(model=self.model.backbone)
 
     def build_trainer(self) -> None:
         """
-        Builds the SentenceTransformerTrainer instance using the configuration,
-        dataset, loss, callbacks, and evaluator.
+        Builds the SentenceTransformerTrainer instance.
         """
         logger.info("Building SentenceTransformerTrainer.")
         self.trainer = SentenceTransformerTrainer(
-            model=self.model.model,
+            model=self.model.backbone,
             args=self.args,
             train_dataset=self.train_dataset,
             eval_dataset=self.eval_dataset,
@@ -279,40 +128,92 @@ class EmbeddingTrainer:
     def train(self) -> None:
         """
         Runs the training execution using the configured SentenceTransformerTrainer.
-        Supports automatic resume lookup from the latest checkpoint.
         """
         if self.trainer is None:
             raise RuntimeError("Trainer has not been built. Call build_trainer() first.")
             
-        resume_path = None
+        self.set_seed()
         
-        # Check if resume_from_checkpoint option is requested
+        resume_path = None
         if self.config.resume_from_checkpoint:
             if isinstance(self.config.resume_from_checkpoint, str):
-                # If a specific path is provided, check if it exists
                 if os.path.exists(self.config.resume_from_checkpoint):
                     resume_path = self.config.resume_from_checkpoint
                     logger.info(f"Resume: Using explicitly requested checkpoint folder: {resume_path}")
                 else:
                     logger.warning(
-                        f"Resume: Explicit checkpoint path '{self.config.resume_from_checkpoint}' "
-                        "not found. Attempting to look up latest checkpoint automatically."
+                        f"Resume: Explicit checkpoint path '{self.config.resume_from_checkpoint}' not found."
                     )
             
-            # If path was not set or not found, search output_dir for latest valid checkpoint
             if resume_path is None:
                 resume_path = self.checkpoint_manager.find_latest_checkpoint()
                 
             if resume_path is not None:
-                logger.info(f"Resume: Successfully loaded checkpoint state from: {resume_path}. Restoring optimizer, scheduler, global step, and epoch.")
+                logger.info(f"Resume: Successfully loaded checkpoint state from: {resume_path}.")
             else:
                 logger.warning(
-                    f"Resume: No valid checkpoint folder found in output directory '{self.config.output_dir}'. "
-                    "Starting training from scratch."
+                    f"Resume: No valid checkpoint folder found in output directory '{self.config.output_dir}'."
                 )
                 
+        self.print_experiment_summary()
+                
         logger.info("Starting SentenceTransformerTrainer training loop.")
+        start_time = time.time()
         self.trainer.train(resume_from_checkpoint=resume_path)
+        end_time = time.time()
+        
+        total_time = end_time - start_time
+        hours, rem = divmod(total_time, 3600)
+        minutes, seconds = divmod(rem, 60)
+        logger.info(f"Total training time: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
+
+    def set_seed(self) -> None:
+        """
+        Seeds torch, numpy, random, and datasets for reproducibility.
+        """
+        seed = self.config.seed
+        logger.info(f"Setting random seed to {seed} for reproducibility.")
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            
+        try:
+            import datasets
+            datasets.utils.logging.set_verbosity_warning()
+            datasets.enable_progress_bar()
+        except ImportError:
+            pass
+
+    def print_experiment_summary(self) -> None:
+        """
+        Prints an experiment summary before training begins.
+        Logs total, trainable, and frozen parameters.
+        """
+        model = self.model.backbone
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        frozen_params = total_params - trainable_params
+        
+        logger.info("="*50)
+        logger.info("EXPERIMENT SUMMARY")
+        logger.info("="*50)
+        logger.info(f"Project Name: {self.config.project_name}")
+        logger.info(f"Experiment Name: {self.config.experiment_name}")
+        logger.info(f"Train Dataset Size: {len(self.train_dataset)}")
+        if self.eval_dataset is not None:
+            logger.info(f"Validation Dataset Size: {len(self.eval_dataset)}")
+        logger.info(f"Epochs: {self.config.epochs}")
+        logger.info(f"Batch Size: {self.config.batch_size}")
+        logger.info(f"Learning Rate: {self.config.learning_rate}")
+        logger.info(f"Seed: {self.config.seed}")
+        logger.info("-" * 50)
+        logger.info("MODEL PARAMETERS")
+        logger.info(f"Total Parameters: {total_params:,}")
+        logger.info(f"Trainable Parameters: {trainable_params:,}")
+        logger.info(f"Frozen Parameters: {frozen_params:,}")
+        logger.info("="*50)
 
     def evaluate(self) -> Dict[str, float]:
         """
@@ -323,15 +224,9 @@ class EmbeddingTrainer:
         logger.info("Starting evaluation.")
         return self.trainer.evaluate()
 
-    def save_model(self, output_dir: str) -> None:
+    def save_checkpoint(self, output_dir: str) -> None:
         """
         Saves the trained model to the specified folder.
         """
         logger.info(f"Saving model to: {output_dir}")
         self.model.save(output_dir)
-
-    def save_checkpoint(self, output_dir: str) -> None:
-        """
-        Saves the model checkpoint (delegates to save_model for backward compatibility).
-        """
-        self.save_model(output_dir)

@@ -1,4 +1,4 @@
-from modern_nlp.embeddings.dataset import load_dataset, create_input_examples
+from modern_nlp.embeddings.dataset import load_dataset, prepare_dataset
 from modern_nlp.embeddings.model import EmbeddingModel
 from modern_nlp.embeddings.trainer import EmbeddingTrainer
 from modern_nlp.embeddings.evaluator import EmbeddingEvaluator

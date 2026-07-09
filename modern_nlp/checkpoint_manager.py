@@ -1,25 +1,9 @@
 import os
 import shutil
-import logging
-import sys
 from typing import Optional, Any
+from modern_nlp.embeddings.utils import get_logger
 
-def get_local_logger(name: str) -> logging.Logger:
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(logging.INFO)
-        formatter = logging.Formatter(
-            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    logger.propagate = False
-    return logger
-
-logger = get_local_logger(__name__)
+logger = get_logger(__name__)
 
 class CheckpointManager:
     """

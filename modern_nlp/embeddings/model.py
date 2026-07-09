@@ -18,6 +18,10 @@ class EmbeddingModel:
         if max_seq_length is not None:
             self.model.max_seq_length = max_seq_length
 
+    @property
+    def backbone(self) -> SentenceTransformer:
+        return self.model
+
     def encode(self, texts: Union[str, List[str]], **kwargs: Any) -> Any:
         return self.model.encode(texts, **kwargs)
 

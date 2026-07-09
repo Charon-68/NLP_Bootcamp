@@ -1,5 +1,7 @@
 import os
+import time
 from typing import Optional, Any
+import torch
 from transformers import TrainerCallback, TrainerState, TrainerControl
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, TaskID
 
@@ -11,25 +13,52 @@ logger = get_logger(__name__)
 class ExperimentTrackingCallback(TrainerCallback):
     """
     Custom callback to log training loss, learning rate, epoch, global step,
-    validation metrics, and saved checkpoint paths using our custom logger.
+    validation metrics, saved checkpoint paths, throughput, ETA, grad norm, and GPU memory usage.
     """
+    def __init__(self):
+        self.start_time = None
+    def on_train_begin(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> None:
+        self.start_time = time.time()
+
     def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs) -> None:
         if logs:
             loss = logs.get("loss")
             lr = logs.get("learning_rate")
             epoch = logs.get("epoch")
             step = state.global_step
+            grad_norm = logs.get("grad_norm")
             
             log_parts = []
+            if epoch is not None:
+                log_parts.append(f"Epoch: {epoch:.2f}")
+            log_parts.append(f"Step: {step}")
             if loss is not None:
                 log_parts.append(f"Loss: {loss:.4f}")
             if lr is not None:
-                log_parts.append(f"Learning Rate: {lr:.2e}")
-            if epoch is not None:
-                log_parts.append(f"Epoch: {epoch:.2f}")
-            log_parts.append(f"Global Step: {step}")
+                log_parts.append(f"LR: {lr:.2e}")
+            if grad_norm is not None:
+                log_parts.append(f"Grad Norm: {grad_norm:.4f}")
+                
+            # Throughput and ETA calculation
+            if self.start_time is not None and step > 0:
+                elapsed = time.time() - self.start_time
+                throughput = step / elapsed
+                log_parts.append(f"Throughput: {throughput:.2f} steps/s")
+                
+                if state.max_steps > 0:
+                    remaining_steps = state.max_steps - step
+                    eta_seconds = remaining_steps / throughput if throughput > 0 else 0
+                    hours, rem = divmod(eta_seconds, 3600)
+                    minutes, seconds = divmod(rem, 60)
+                    log_parts.append(f"ETA: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
+                    
+            # GPU Memory usage
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / (1024 ** 2)
+                reserved = torch.cuda.memory_reserved() / (1024 ** 2)
+                log_parts.append(f"GPU Mem (Alloc/Res): {allocated:.1f}MB/{reserved:.1f}MB")
             
-            logger.info("Training Progress - " + ", ".join(log_parts))
+            logger.info("Training Progress - " + " | ".join(log_parts))
 
     def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics=None, **kwargs) -> None:
         if metrics:
