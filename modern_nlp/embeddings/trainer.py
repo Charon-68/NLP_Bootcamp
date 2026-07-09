@@ -163,6 +163,7 @@ class EmbeddingTrainer:
         end_time = time.time()
         
         total_time = end_time - start_time
+        self.total_training_time = total_time
         hours, rem = divmod(total_time, 3600)
         minutes, seconds = divmod(rem, 60)
         logger.info(f"Total training time: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")

@@ -60,3 +60,76 @@ class TrainingPipeline:
         trainer.save_checkpoint(final_save_path)
 
         logger.info(f"Final trained model successfully saved at: {os.path.abspath(final_save_path)}")
+
+        # Evaluate final model
+        metrics = {}
+        if trainer.evaluator:
+            logger.info("Evaluating final model state...")
+            metrics = trainer.evaluate()
+            
+        # Run benchmark
+        try:
+            from modern_nlp.embeddings.benchmark import run_benchmark
+            import json
+            
+            benchmark_dir = os.path.join(output_dir, "benchmark")
+            logger.info("Running final automated benchmark comparison...")
+            run_benchmark(
+                baseline_name=model_name,
+                finetuned_name=final_save_path,
+                output_dir=benchmark_dir,
+                num_samples=1000
+            )
+            
+            benchmark_json = os.path.join(benchmark_dir, "benchmark_report.json")
+            if os.path.exists(benchmark_json):
+                with open(benchmark_json, "r") as f:
+                    bench_report = json.load(f)
+            else:
+                bench_report = None
+        except Exception as e:
+            logger.error(f"Failed to run automated benchmark: {e}")
+            bench_report = None
+
+        # Generate Visualizations
+        try:
+            from modern_nlp.embeddings.visualization import generate_visualizations
+            import numpy as np
+            
+            logger.info("Generating embedding visualizations...")
+            vis_dir = os.path.join(output_dir, "visualizations")
+            
+            subset_size = min(500, len(val_dataset))
+            vis_texts = val_dataset["sentence_0"][:subset_size] + val_dataset["sentence_1"][:subset_size]
+            vis_embeddings = trainer.model.encode(vis_texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True)
+            vis_labels = np.array([0] * subset_size + [1] * subset_size)
+            
+            generate_visualizations(
+                embeddings=vis_embeddings,
+                labels=vis_labels,
+                output_dir=vis_dir,
+                methods=["pca", "tsne"] 
+            )
+        except Exception as e:
+            logger.error(f"Failed to generate visualizations: {e}")
+
+        # Generate Experiment Report
+        try:
+            from modern_nlp.embeddings.report import generate_experiment_report
+            from modern_nlp.hardware import detect_device
+            
+            # config dictionary
+            config_dict = train_config.__dict__ if hasattr(train_config, "__dict__") else train_config
+            
+            generate_experiment_report(
+                config=config_dict,
+                hardware_info={"device": str(detect_device())},
+                training_time_sec=getattr(trainer, "total_training_time", 0.0),
+                dataset_stats={"train_size": len(train_dataset), "val_size": len(val_dataset)},
+                evaluation_metrics=metrics,
+                benchmark_comparison=bench_report,
+                checkpoint_info={"final_model_path": final_save_path},
+                output_dir=output_dir
+            )
+        except Exception as e:
+            logger.error(f"Failed to generate automated experiment report: {e}")

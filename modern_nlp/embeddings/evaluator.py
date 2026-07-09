@@ -1,8 +1,8 @@
 import os
-import json
 from typing import Dict, Any, Optional
 
-from sentence_transformers.evaluation import SentenceEvaluator
+from sentence_transformers.sentence_transformer.evaluation import SentenceEvaluator, InformationRetrievalEvaluator
+from sentence_transformers.similarity_functions import SimilarityFunction
 from modern_nlp.embeddings.utils import get_logger
 from modern_nlp.metrics import MetricsManager
 
@@ -11,8 +11,8 @@ logger = get_logger(__name__)
 class EmbeddingEvaluator(SentenceEvaluator):
     """
     EmbeddingEvaluator coordinates evaluation metrics and validation operations.
-    It implements the SentenceEvaluator interface to integrate natively with
-    SentenceTransformerTrainer, computing standard and custom metrics.
+    It wraps the SentenceTransformers InformationRetrievalEvaluator to compute
+    proper embeddings metrics (Recall@K, MRR, MAP, NDCG, Cosine Similarity).
     """
     def __init__(
         self,
@@ -26,6 +26,61 @@ class EmbeddingEvaluator(SentenceEvaluator):
         self.primary_metric = primary_metric
         self.greater_is_better = greater_is_better
         self.metrics_manager = metrics_manager or MetricsManager()
+        self.ir_evaluator = self._build_evaluator()
+
+    def _build_evaluator(self) -> Optional[InformationRetrievalEvaluator]:
+        if self.val_dataset is None or len(self.val_dataset) == 0:
+            return None
+            
+        queries = {}
+        corpus = {}
+        relevant_docs = {}
+        
+        has_label = "label" in self.val_dataset.column_names
+        
+        for idx, row in enumerate(self.val_dataset):
+            q_text = row.get("sentence_0")
+            c_text = row.get("sentence_1")
+            
+            if q_text is None or c_text is None:
+                continue
+                
+            is_positive = True
+            if has_label:
+                label = row.get("label")
+                if label is not None and label == 0:
+                    is_positive = False
+                    
+            if not is_positive:
+                continue
+                
+            q_id = f"q_{idx}"
+            c_id = f"c_{idx}"
+            
+            queries[q_id] = q_text
+            corpus[c_id] = c_text
+            
+            if q_id not in relevant_docs:
+                relevant_docs[q_id] = set()
+            relevant_docs[q_id].add(c_id)
+            
+        if not queries:
+            logger.warning("EmbeddingEvaluator: No positive query-corpus pairs found for evaluation.")
+            return None
+            
+        logger.info(f"Built InformationRetrievalEvaluator with {len(queries)} queries and {len(corpus)} corpus items.")
+        return InformationRetrievalEvaluator(
+            queries=queries,
+            corpus=corpus,
+            relevant_docs=relevant_docs,
+            mrr_at_k=[10],
+            ndcg_at_k=[10],
+            precision_recall_at_k=[1, 5, 10],
+            map_at_k=[10],
+            show_progress_bar=False,
+            write_csv=True,
+            main_score_function=SimilarityFunction.COSINE
+        )
 
     def __call__(
         self,
@@ -36,14 +91,23 @@ class EmbeddingEvaluator(SentenceEvaluator):
     ) -> Dict[str, float]:
         """
         Executes evaluation on the model during training.
-        Returns a dictionary of metrics.
+        Returns a dictionary of metrics and saves reports.
         """
         logger.info(f"EmbeddingEvaluator: Running evaluation at epoch {epoch}, steps {steps}.")
         
-        # 1. Validation Loop & Metric Computation
-        metrics = self.evaluate(model)
+        if self.ir_evaluator is None:
+            logger.warning("No evaluation dataset available or no positive pairs found. Skipping evaluation.")
+            return {}
+            
+        # The ir_evaluator generates CSVs directly in output_path if provided
+        # Returns a dict or float depending on the sentence-transformers version, but modern versions return dict.
+        metrics = self.ir_evaluator(model, output_path=output_path, epoch=epoch, steps=steps)
         
-        # 2. Metrics Serialization
+        # In case the evaluator returns a float, convert to dict using primary metric.
+        if isinstance(metrics, float):
+            metrics = {self.primary_metric: metrics}
+        
+        # 2. Metrics Serialization to JSON
         if output_path is not None:
             os.makedirs(output_path, exist_ok=True)
             file_name = "eval_results.json"
@@ -55,40 +119,8 @@ class EmbeddingEvaluator(SentenceEvaluator):
             out_file = os.path.join(output_path, file_name)
             self.metrics_manager.serialize_metrics(metrics, out_file)
             
-        return metrics
-
-    def evaluate(self, model: Any) -> Dict[str, float]:
-        """
-        Runs the validation loop and computes metrics.
-        Supports standard metrics (eval_loss, accuracy) and constructs architecture
-        placeholders for future information retrieval metrics (Recall@K, MRR, MAP, NDCG).
-        """
-        logger.info("EmbeddingEvaluator: Computing metrics.")
-        
-        # Validation Loop (simulated / placeholder for actual computation)
-        # Compute standard loss placeholder
-        val_loss = 0.0
-        accuracy = 0.0
-        
-        # Compute future IR metrics (placeholders)
-        recall_at_1 = 0.0
-        recall_at_5 = 0.0
-        recall_at_10 = 0.0
-        mrr = 0.0
-        map_val = 0.0
-        ndcg = 0.0
-        
-        metrics = {
-            "eval_loss": val_loss,
-            "accuracy": accuracy,
-            # Future metrics placeholders
-            "recall_at_1": recall_at_1,
-            "recall_at_5": recall_at_5,
-            "recall_at_10": recall_at_10,
-            "mrr": mrr,
-            "map": map_val,
-            "ndcg": ndcg,
-        }
-        
-        logger.info(f"EmbeddingEvaluator: Evaluation completed. Metrics: {metrics}")
+        # Also log the computed metrics summary
+        log_parts = [f"{k}: {v:.4f}" for k, v in metrics.items() if isinstance(v, (int, float))]
+        logger.info("Evaluation Summary - " + " | ".join(log_parts))
+            
         return metrics
