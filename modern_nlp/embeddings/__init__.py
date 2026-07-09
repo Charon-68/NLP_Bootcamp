@@ -4,6 +4,12 @@ from modern_nlp.embeddings.trainer import EmbeddingTrainer
 from modern_nlp.embeddings.evaluator import EmbeddingEvaluator
 from modern_nlp.embeddings.inference import EmbeddingInference
 from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.embeddings.callbacks import (
+    ExperimentTrackingCallback,
+    EarlyStoppingCallback,
+    ProgressCallback,
+    CheckpointCallback
+)
 
 __all__ = [
     "load_dataset",
@@ -13,4 +19,8 @@ __all__ = [
     "EmbeddingEvaluator",
     "EmbeddingInference",
     "get_logger",
+    "ExperimentTrackingCallback",
+    "EarlyStoppingCallback",
+    "ProgressCallback",
+    "CheckpointCallback",
 ]

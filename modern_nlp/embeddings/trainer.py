@@ -1,71 +1,31 @@
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from torch.utils.data import DataLoader
 from sentence_transformers.sentence_transformer.readers import InputExample
 from sentence_transformers.sentence_transformer.losses import MultipleNegativesRankingLoss
 from sentence_transformers.sentence_transformer.trainer import SentenceTransformerTrainer
 from sentence_transformers.sentence_transformer.training_args import SentenceTransformerTrainingArguments
 from datasets import Dataset
-from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
+from transformers import TrainerCallback, TrainerState, TrainerControl
 
 from modern_nlp.config import TrainConfig
 from modern_nlp.embeddings.model import EmbeddingModel
 from modern_nlp.embeddings.utils import get_logger
+from modern_nlp.embeddings.callbacks import (
+    ExperimentTrackingCallback,
+    EarlyStoppingCallback,
+    ProgressCallback,
+    CheckpointCallback
+)
 
 logger = get_logger(__name__)
-
-class ExperimentTrackingCallback(TrainerCallback):
-    """
-    Custom callback to log training loss, learning rate, epoch, global step,
-    validation metrics, and saved checkpoint paths using our custom logger.
-    """
-    def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs) -> None:
-        if logs:
-            loss = logs.get("loss")
-            lr = logs.get("learning_rate")
-            epoch = logs.get("epoch")
-            step = state.global_step
-            
-            log_parts = []
-            if loss is not None:
-                log_parts.append(f"Loss: {loss:.4f}")
-            if lr is not None:
-                log_parts.append(f"Learning Rate: {lr:.2e}")
-            if epoch is not None:
-                log_parts.append(f"Epoch: {epoch:.2f}")
-            log_parts.append(f"Global Step: {step}")
-            
-            logger.info("Training Progress - " + ", ".join(log_parts))
-
-    def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics=None, **kwargs) -> None:
-        if metrics:
-            epoch = metrics.get("epoch", state.epoch)
-            step = state.global_step
-            
-            log_parts = []
-            for k, v in metrics.items():
-                if k not in ["epoch", "step"]:
-                    if isinstance(v, float):
-                        log_parts.append(f"{k}: {v:.4f}")
-                    else:
-                        log_parts.append(f"{k}: {v}")
-                        
-            logger.info(
-                f"Evaluation Progress - Epoch: {epoch:.2f}, Global Step: {step}, "
-                f"Metrics: {' | '.join(log_parts)}"
-            )
-
-    def on_save(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> None:
-        checkpoint_dir = f"checkpoint-{state.global_step}"
-        checkpoint_path = os.path.join(args.output_dir, checkpoint_dir)
-        logger.info(f"Model checkpoint saved successfully to: {checkpoint_path}")
 
 class EmbeddingTrainer:
     """
     EmbeddingTrainer is responsible for configuring training parameters,
     preparing input datasets/dataloaders, building training loss, and
     running the SentenceTransformerTrainer training loop using Pydantic TrainConfig
-    with TensorBoard and wandb experiment tracking support.
+    with custom experiment tracking, early stopping, progress bar, and checkpointing callbacks.
     """
     def __init__(
         self,
@@ -79,48 +39,63 @@ class EmbeddingTrainer:
         self.eval_examples = eval_examples
         self.config = training_config
         
-        # Build training dataset from InputExamples
+        # Build training and validation datasets
         self.train_dataset = self.build_dataset(self.train_examples)
-        
-        # Build validation dataset from InputExamples if provided
         self.eval_dataset = self.build_dataset(self.eval_examples) if self.eval_examples is not None else None
         
-        # Build training loss
-        self.loss = self.build_loss()
+        # Initialize and register default custom callbacks list automatically
+        self.callbacks: List[TrainerCallback] = [
+            ExperimentTrackingCallback(),
+            ProgressCallback(),
+            CheckpointCallback(
+                metric=self.config.metric_for_best_model,
+                greater_is_better=self.config.greater_is_better
+            )
+        ]
         
-        # Configure Training Arguments
-        self.args = self.configure_args()
-        
-        # Configure callbacks (experiment tracking callback & early stopping)
-        callbacks = [ExperimentTrackingCallback()]
+        # Register custom EarlyStoppingCallback if configured
         if self.config.early_stopping_patience is not None and self.config.early_stopping_patience > 0:
             if self.eval_dataset is not None:
-                logger.info(f"Adding EarlyStoppingCallback with patience={self.config.early_stopping_patience}")
-                callbacks.append(EarlyStoppingCallback(early_stopping_patience=self.config.early_stopping_patience))
+                logger.info(f"Automatically registering EarlyStoppingCallback with patience={self.config.early_stopping_patience}")
+                self.callbacks.append(
+                    EarlyStoppingCallback(
+                        patience=self.config.early_stopping_patience,
+                        metric=self.config.metric_for_best_model,
+                        greater_is_better=self.config.greater_is_better
+                    )
+                )
             else:
                 logger.warning("Early stopping is configured, but no evaluation dataset was provided. Early stopping callback will not be added.")
         
-        # Configure SentenceTransformerTrainer
-        self.trainer = SentenceTransformerTrainer(
-            model=self.model.model,
-            args=self.args,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            loss=self.loss,
-            callbacks=callbacks,
-        )
+        # Build training loss, training arguments, and the trainer itself
+        self.loss = self.build_loss()
+        self.args = self.build_training_arguments()
+        
+        self.trainer: Optional[SentenceTransformerTrainer] = None
+        self.build_trainer()
+
+    def register_callback(self, callback: TrainerCallback) -> None:
+        """
+        Registers an additional callback for the trainer.
+        If the trainer has already been built, adds it directly to the trainer instance.
+        Otherwise, adds it to the list of pending callbacks to be registered at build time.
+        """
+        logger.info(f"Registering callback: {callback.__class__.__name__}")
+        if self.trainer is not None:
+            self.trainer.add_callback(callback)
+        else:
+            self.callbacks.append(callback)
 
     def build_loss(self) -> MultipleNegativesRankingLoss:
         """
-        Builds the training loss function.
-        Initially uses MultipleNegativesRankingLoss.
+        Builds and returns the training loss function.
         """
         logger.info("Building MultipleNegativesRankingLoss.")
         return MultipleNegativesRankingLoss(model=self.model.model)
 
     def build_dataset(self, examples: List[InputExample]) -> Dataset:
         """
-        Converts the list of InputExample objects to a Hugging Face Dataset.
+        Converts a list of InputExample objects to a Hugging Face Dataset.
         Maps the list structure to columns like sentence_0, sentence_1...
         """
         logger.info("Converting InputExamples list to Hugging Face Dataset.")
@@ -156,7 +131,7 @@ class EmbeddingTrainer:
         logger.info(f"Building DataLoader with batch_size={batch_size}, shuffle={shuffle}.")
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
-    def configure_args(self) -> SentenceTransformerTrainingArguments:
+    def build_training_arguments(self) -> SentenceTransformerTrainingArguments:
         """
         Maps properties of TrainConfig to SentenceTransformerTrainingArguments.
         """
@@ -211,16 +186,48 @@ class EmbeddingTrainer:
             report_to=report_to,
         )
 
+    def build_trainer(self) -> None:
+        """
+        Builds the SentenceTransformerTrainer instance using the configuration,
+        dataset, loss, and callbacks.
+        """
+        logger.info("Building SentenceTransformerTrainer.")
+        self.trainer = SentenceTransformerTrainer(
+            model=self.model.model,
+            args=self.args,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            loss=self.loss,
+            callbacks=self.callbacks,
+        )
+
     def train(self) -> None:
         """
         Runs the training execution using the configured SentenceTransformerTrainer.
         """
+        if self.trainer is None:
+            raise RuntimeError("Trainer has not been built. Call build_trainer() first.")
         logger.info("Starting SentenceTransformerTrainer training loop.")
         self.trainer.train(resume_from_checkpoint=self.config.resume_from_checkpoint)
 
-    def save_checkpoint(self, output_dir: str) -> None:
+    def evaluate(self) -> Dict[str, float]:
+        """
+        Runs evaluation on the evaluation dataset.
+        """
+        if self.trainer is None:
+            raise RuntimeError("Trainer has not been built. Call build_trainer() first.")
+        logger.info("Starting evaluation.")
+        return self.trainer.evaluate()
+
+    def save_model(self, output_dir: str) -> None:
         """
         Saves the trained model to the specified folder.
         """
-        logger.info(f"Saving model checkpoint to: {output_dir}")
+        logger.info(f"Saving model to: {output_dir}")
         self.model.save(output_dir)
+
+    def save_checkpoint(self, output_dir: str) -> None:
+        """
+        Saves the model checkpoint (delegates to save_model for backward compatibility).
+        """
+        self.save_model(output_dir)
