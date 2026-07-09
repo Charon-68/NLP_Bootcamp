@@ -1,5 +1,6 @@
 import os
 from typing import List, Optional, Dict, Any
+import torch
 from torch.utils.data import DataLoader
 from sentence_transformers.sentence_transformer.readers import InputExample
 from sentence_transformers.sentence_transformer.losses import MultipleNegativesRankingLoss
@@ -25,7 +26,8 @@ class EmbeddingTrainer:
     EmbeddingTrainer is responsible for configuring training parameters,
     preparing input datasets/dataloaders, building training loss, and
     running the SentenceTransformerTrainer training loop using Pydantic TrainConfig
-    with custom experiment tracking, early stopping, progress bar, and checkpointing callbacks.
+    with custom experiment tracking, early stopping, progress bar, checkpointing,
+    and automatic hardware-aware mixed-precision configurations.
     """
     def __init__(
         self,
@@ -134,6 +136,7 @@ class EmbeddingTrainer:
     def build_training_arguments(self) -> SentenceTransformerTrainingArguments:
         """
         Maps properties of TrainConfig to SentenceTransformerTrainingArguments.
+        Supports hardware-aware mixed precision with auto-fallbacks.
         """
         logger.info("Mapping TrainConfig parameters to SentenceTransformerTrainingArguments.")
         
@@ -157,6 +160,48 @@ class EmbeddingTrainer:
             if "wandb" in report_to:
                 report_to.remove("wandb")
         
+        # Mixed Precision Hardware Detection & Fallback
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+            
+        logger.info(f"Mixed Precision - Auto-detected device hardware: {device}")
+        
+        use_bf16 = False
+        use_fp16 = False
+        
+        # 1. Resolve BF16 Precision
+        if self.config.bf16:
+            if device == "cuda" and torch.cuda.is_bf16_supported():
+                use_bf16 = True
+            elif device == "cpu":
+                use_bf16 = True
+            else:
+                logger.warning(
+                    f"Mixed Precision - BF16 was requested but is not supported on {device}. "
+                    "Checking FP16 availability."
+                )
+                
+        # 2. Resolve FP16 Precision (if BF16 not selected/supported)
+        if not use_bf16 and self.config.fp16:
+            if device == "cuda" or device == "mps":
+                use_fp16 = True
+            else:
+                logger.warning(
+                    f"Mixed Precision - FP16 was requested but is not supported on {device}. "
+                    "Falling back to FP32."
+                )
+                
+        # Log final selected training precision
+        if use_bf16:
+            logger.info("Mixed Precision - Final selected precision: BF16")
+        elif use_fp16:
+            logger.info("Mixed Precision - Final selected precision: FP16")
+        else:
+            logger.info("Mixed Precision - Final selected precision: FP32")
+            
         return SentenceTransformerTrainingArguments(
             output_dir=self.config.output_dir,
             num_train_epochs=self.config.epochs,
@@ -168,8 +213,8 @@ class EmbeddingTrainer:
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             max_grad_norm=self.config.max_grad_norm,
             lr_scheduler_type=self.config.scheduler_type,
-            fp16=self.config.fp16,
-            bf16=self.config.bf16,
+            fp16=use_fp16,
+            bf16=use_bf16,
             seed=self.config.seed,
             logging_steps=self.config.logging_steps,
             save_steps=self.config.save_steps,
