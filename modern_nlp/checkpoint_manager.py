@@ -38,7 +38,13 @@ class CheckpointManager:
         """Safely saves model weights to target_dir."""
         os.makedirs(target_dir, exist_ok=True)
         logger.info(f"CheckpointManager: Saving model state to: {target_dir}")
-        model.save(target_dir)
+        if hasattr(model, "save"):
+            model.save(target_dir)
+        elif hasattr(model, "save_pretrained"):
+            model.save_pretrained(target_dir)
+        else:
+            import torch
+            torch.save(model.state_dict(), os.path.join(target_dir, "pytorch_model.bin"))
 
     def cleanup_old_checkpoints(self) -> None:
         """

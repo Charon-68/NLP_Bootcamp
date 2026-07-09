@@ -1,0 +1,5 @@
+project_name: "modern-nlp-classification"
+experiment_name: "ag-news-baseline"
+model_name: "answerdotai/ModernBERT-base"
+num_labels: 4
+max_seq_length: 512

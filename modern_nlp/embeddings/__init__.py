@@ -4,7 +4,7 @@ from modern_nlp.embeddings.trainer import EmbeddingTrainer
 from modern_nlp.embeddings.evaluator import EmbeddingEvaluator
 from modern_nlp.embeddings.inference import EmbeddingInference
 from modern_nlp.embeddings.utils import get_logger
-from modern_nlp.embeddings.callbacks import (
+from modern_nlp.callbacks import (
     ExperimentTrackingCallback,
     EarlyStoppingCallback,
     ProgressCallback,

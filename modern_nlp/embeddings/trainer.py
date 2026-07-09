@@ -13,7 +13,7 @@ from modern_nlp.config import TrainConfig
 from modern_nlp.embeddings.model import EmbeddingModel
 from modern_nlp.embeddings.utils import get_logger
 from modern_nlp.checkpoint_manager import CheckpointManager
-from modern_nlp.embeddings.callbacks import (
+from modern_nlp.callbacks import (
     ExperimentTrackingCallback,
     EarlyStoppingCallback,
     ProgressCallback,
