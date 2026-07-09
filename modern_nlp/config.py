@@ -35,6 +35,8 @@ class TrainConfig(BaseModel):
     resume_from_checkpoint: Optional[Union[bool, str]] = Field(default=None, description="Path to checkpoint directory or bool.")
     output_dir: str = Field(default="checkpoints/", description="Output folder for saving checkpoints.")
     logging_dir: str = Field(default="logs/", description="Directory for storing logs.")
+    report_to: list[str] = Field(default=["tensorboard"], description="List of experiment trackers to report results to (e.g. tensorboard, wandb).")
+    use_wandb: bool = Field(default=False, description="Flag to explicitly enable Weights & Biases logging.")
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
     """

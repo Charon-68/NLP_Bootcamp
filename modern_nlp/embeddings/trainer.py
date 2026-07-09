@@ -1,3 +1,4 @@
+import os
 from typing import List, Optional
 from torch.utils.data import DataLoader
 from sentence_transformers.sentence_transformer.readers import InputExample
@@ -5,7 +6,7 @@ from sentence_transformers.sentence_transformer.losses import MultipleNegativesR
 from sentence_transformers.sentence_transformer.trainer import SentenceTransformerTrainer
 from sentence_transformers.sentence_transformer.training_args import SentenceTransformerTrainingArguments
 from datasets import Dataset
-from transformers import EarlyStoppingCallback
+from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
 
 from modern_nlp.config import TrainConfig
 from modern_nlp.embeddings.model import EmbeddingModel
@@ -13,11 +14,58 @@ from modern_nlp.embeddings.utils import get_logger
 
 logger = get_logger(__name__)
 
+class ExperimentTrackingCallback(TrainerCallback):
+    """
+    Custom callback to log training loss, learning rate, epoch, global step,
+    validation metrics, and saved checkpoint paths using our custom logger.
+    """
+    def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs) -> None:
+        if logs:
+            loss = logs.get("loss")
+            lr = logs.get("learning_rate")
+            epoch = logs.get("epoch")
+            step = state.global_step
+            
+            log_parts = []
+            if loss is not None:
+                log_parts.append(f"Loss: {loss:.4f}")
+            if lr is not None:
+                log_parts.append(f"Learning Rate: {lr:.2e}")
+            if epoch is not None:
+                log_parts.append(f"Epoch: {epoch:.2f}")
+            log_parts.append(f"Global Step: {step}")
+            
+            logger.info("Training Progress - " + ", ".join(log_parts))
+
+    def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics=None, **kwargs) -> None:
+        if metrics:
+            epoch = metrics.get("epoch", state.epoch)
+            step = state.global_step
+            
+            log_parts = []
+            for k, v in metrics.items():
+                if k not in ["epoch", "step"]:
+                    if isinstance(v, float):
+                        log_parts.append(f"{k}: {v:.4f}")
+                    else:
+                        log_parts.append(f"{k}: {v}")
+                        
+            logger.info(
+                f"Evaluation Progress - Epoch: {epoch:.2f}, Global Step: {step}, "
+                f"Metrics: {' | '.join(log_parts)}"
+            )
+
+    def on_save(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> None:
+        checkpoint_dir = f"checkpoint-{state.global_step}"
+        checkpoint_path = os.path.join(args.output_dir, checkpoint_dir)
+        logger.info(f"Model checkpoint saved successfully to: {checkpoint_path}")
+
 class EmbeddingTrainer:
     """
     EmbeddingTrainer is responsible for configuring training parameters,
     preparing input datasets/dataloaders, building training loss, and
-    running the SentenceTransformerTrainer training loop using Pydantic TrainConfig.
+    running the SentenceTransformerTrainer training loop using Pydantic TrainConfig
+    with TensorBoard and wandb experiment tracking support.
     """
     def __init__(
         self,
@@ -43,8 +91,8 @@ class EmbeddingTrainer:
         # Configure Training Arguments
         self.args = self.configure_args()
         
-        # Configure callbacks (e.g. early stopping)
-        callbacks = []
+        # Configure callbacks (experiment tracking callback & early stopping)
+        callbacks = [ExperimentTrackingCallback()]
         if self.config.early_stopping_patience is not None and self.config.early_stopping_patience > 0:
             if self.eval_dataset is not None:
                 logger.info(f"Adding EarlyStoppingCallback with patience={self.config.early_stopping_patience}")
@@ -125,6 +173,15 @@ class EmbeddingTrainer:
                 
         save_strategy = self.config.save_strategy
         
+        # Resolve report_to tracking integrations list based on use_wandb flag
+        report_to = list(self.config.report_to)
+        if self.config.use_wandb:
+            if "wandb" not in report_to:
+                report_to.append("wandb")
+        else:
+            if "wandb" in report_to:
+                report_to.remove("wandb")
+        
         return SentenceTransformerTrainingArguments(
             output_dir=self.config.output_dir,
             num_train_epochs=self.config.epochs,
@@ -151,6 +208,7 @@ class EmbeddingTrainer:
             dataloader_pin_memory=self.config.pin_memory,
             logging_dir=self.config.logging_dir,
             run_name=self.config.experiment_name,
+            report_to=report_to,
         )
 
     def train(self) -> None:

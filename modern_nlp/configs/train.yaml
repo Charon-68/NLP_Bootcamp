@@ -44,3 +44,7 @@ resume_from_checkpoint: null
 # Output Directories
 output_dir: "checkpoints/"
 logging_dir: "logs/"
+
+# Logging & Experiment Tracking
+report_to: ["tensorboard"]
+use_wandb: false
